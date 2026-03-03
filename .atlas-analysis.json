@@ -1,0 +1,131 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Serilog",
+  "projectDescription": "Simple .NET logging library with fully-structured events and message templates",
+  "theme": "linden",
+  "primaryColor": "#1e88e5",
+  "lightColor": "#64b5f6",
+  "darkColor": "#1565c0",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/structured-logging",
+              "concepts/message-templates",
+              "concepts/log-levels",
+              "concepts/enrichment",
+              "concepts/filtering"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/basics",
+              "configuration/sinks",
+              "configuration/minimum-level",
+              "configuration/enrichers",
+              "configuration/destructuring",
+              "configuration/settings-files"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/sinks",
+              "guides/context",
+              "guides/formatting",
+              "guides/error-handling",
+              "guides/performance",
+              "guides/asp-net-core"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/creating-sinks",
+              "advanced/creating-enrichers",
+              "advanced/creating-filters",
+              "advanced/batching",
+              "advanced/lifecycle"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/ilogger",
+              "api/log",
+              "api/logger-configuration"
+            ]
+          },
+          {
+            "group": "Events",
+            "pages": [
+              "api/log-event",
+              "api/log-event-level",
+              "api/message-template",
+              "api/log-event-property"
+            ]
+          },
+          {
+            "group": "Extensibility",
+            "pages": [
+              "api/ilog-event-sink",
+              "api/ilog-event-enricher",
+              "api/ilog-event-filter",
+              "api/idestructuring-policy"
+            ]
+          },
+          {
+            "group": "Context",
+            "pages": [
+              "api/log-context",
+              "api/logging-level-switch"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Structured logging with message templates",
+    "Flexible configuration API",
+    "Pluggable sinks for multiple output targets",
+    "Log event enrichment with contextual properties",
+    "Minimum level filtering and dynamic level switching",
+    "Extensible through custom sinks, enrichers, and filters",
+    "Zero-overhead when logging is disabled",
+    "Support for .NET Framework, .NET Core, and .NET 5+"
+  ],
+  "publicApiSurface": [
+    "ILogger",
+    "Log (static class)",
+    "LoggerConfiguration",
+    "LogEvent",
+    "LogEventLevel",
+    "MessageTemplate",
+    "ILogEventSink",
+    "ILogEventEnricher",
+    "ILogEventFilter",
+    "LogContext",
+    "LoggingLevelSwitch",
+    "IDestructuringPolicy",
+    "IBatchedLogEventSink"
+  ]
+}
