@@ -99,6 +99,7 @@
             "group": "Extensibility",
             "pages": [
               "api/ilog-event-sink",
+              "api/ibatched-log-event-sink",
               "api/ilog-event-enricher",
               "api/ilog-event-filter",
               "api/idestructuring-policy"

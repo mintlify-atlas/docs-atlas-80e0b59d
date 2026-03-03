@@ -1,0 +1,234 @@
+---
+title: IBatchedLogEventSink
+description: Interface for sinks that accept log events in batches for improved performance
+---
+
+The `IBatchedLogEventSink` interface defines a contract for sinks that process log events in batches rather than individually. Batched sinks can achieve significant performance improvements by combining multiple events into single operations, such as network requests or database transactions.
+
+## Interface Definition
+
+From `src/Serilog/Core/IBatchedLogEventSink.cs:24`:
+
+```csharp
+public interface IBatchedLogEventSink
+{
+    Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch);
+    Task OnEmptyBatchAsync();
+}
+```
+
+## Methods
+
+### EmitBatchAsync
+
+Emit a batch of log events asynchronously.
+
+<ParamField path="batch" type="IReadOnlyCollection<LogEvent>" required>
+  The batch of events to emit.
+</ParamField>
+
+<ResponseField name="return" type="Task">
+  A task that represents the asynchronous emit operation.
+</ResponseField>
+
+<Warning>
+Implementers should allow exceptions to propagate when batches fail. The batching infrastructure handles exception handling, diagnostics, and retries.
+</Warning>
+
+#### Implementation Guidelines
+
+```csharp
+public class MyBatchedSink : IBatchedLogEventSink
+{
+    public async Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch)
+    {
+        // Don't catch exceptions - let them propagate
+        // The batching infrastructure will handle retries
+        
+        await SendToExternalServiceAsync(batch);
+    }
+    
+    public Task OnEmptyBatchAsync()
+    {
+        // Optional: Perform periodic maintenance
+        return Task.CompletedTask;
+    }
+}
+```
+
+### OnEmptyBatchAsync
+
+Allows sinks to perform periodic work without requiring additional threads or timers.
+
+<ResponseField name="return" type="Task">
+  A task that represents the asynchronous operation.
+</ResponseField>
+
+This method is called periodically when there are no events to process. It's useful for:
+- Performing cleanup operations
+- Sending heartbeat messages
+- Checking connection health
+- Flushing buffers
+
+<Note>
+The default implementation returns `Task.CompletedTask`. Override this method only if you need periodic maintenance.
+</Note>
+
+## Usage with BatchingSink
+
+The `IBatchedLogEventSink` interface is designed to work with Serilog's batching infrastructure from `src/Serilog/Core/Sinks/Batching/BatchingSink.cs`:
+
+```csharp
+using Serilog;
+using Serilog.Configuration;
+using Serilog.Core;
+using Serilog.Core.Sinks.Batching;
+
+public static class MySinkExtensions
+{
+    public static LoggerConfiguration MySink(
+        this LoggerSinkConfiguration sinkConfiguration,
+        BatchingOptions? batchingOptions = null)
+    {
+        var sink = new MyBatchedSink();
+        var batchingSink = new BatchingSink(sink, batchingOptions ?? new BatchingOptions());
+        
+        return sinkConfiguration.Sink(batchingSink);
+    }
+}
+```
+
+## BatchingOptions
+
+Configure batching behavior with `BatchingOptions` from `src/Serilog/Configuration/BatchingOptions.cs:22`:
+
+<ParamField path="BatchSizeLimit" type="int" default="1000">
+  Maximum number of events to include in a single batch.
+</ParamField>
+
+<ParamField path="BufferingTimeLimit" type="TimeSpan" default="2 seconds">
+  Maximum delay between event batches. If a batch can be filled before this limit, it will be emitted without waiting.
+</ParamField>
+
+<ParamField path="QueueLimit" type="int?" default="100000">
+  Maximum number of events to hold in the internal queue. Use `null` for unbounded. When exceeded, events are discarded.
+</ParamField>
+
+<ParamField path="EagerlyEmitFirstEvent" type="bool" default="true">
+  Emit a batch containing the first received event immediately, regardless of batch size or buffering time. Improves perceived responsiveness.
+</ParamField>
+
+<ParamField path="RetryTimeLimit" type="TimeSpan" default="10 minutes">
+  Maximum time to keep retrying failed batches. Lower this to reduce buffering in high-load scenarios.
+</ParamField>
+
+## Complete Example
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Net.Http;
+using System.Text.Json;
+
+public class HttpBatchedSink : IBatchedLogEventSink
+{
+    private readonly HttpClient _httpClient;
+    private readonly string _endpoint;
+    
+    public HttpBatchedSink(string endpoint)
+    {
+        _httpClient = new HttpClient();
+        _endpoint = endpoint;
+    }
+    
+    public async Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch)
+    {
+        // Convert events to JSON
+        var events = batch.Select(e => new
+        {
+            Timestamp = e.Timestamp,
+            Level = e.Level.ToString(),
+            Message = e.RenderMessage(),
+            Properties = e.Properties.ToDictionary(
+                p => p.Key,
+                p => p.Value.ToString()
+            ),
+            Exception = e.Exception?.ToString()
+        });
+        
+        var json = JsonSerializer.Serialize(events);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        
+        // Let exceptions propagate - batching infrastructure handles retries
+        var response = await _httpClient.PostAsync(_endpoint, content);
+        response.EnsureSuccessStatusCode();
+    }
+    
+    public async Task OnEmptyBatchAsync()
+    {
+        // Send periodic heartbeat
+        await _httpClient.GetAsync($"{_endpoint}/heartbeat");
+    }
+}
+
+// Configuration extension
+public static class HttpSinkExtensions
+{
+    public static LoggerConfiguration Http(
+        this LoggerSinkConfiguration sinkConfiguration,
+        string endpoint,
+        BatchingOptions? batchingOptions = null)
+    {
+        var sink = new HttpBatchedSink(endpoint);
+        var options = batchingOptions ?? new BatchingOptions
+        {
+            BatchSizeLimit = 100,
+            BufferingTimeLimit = TimeSpan.FromSeconds(5)
+        };
+        
+        var batchingSink = new BatchingSink(sink, options);
+        return sinkConfiguration.Sink(batchingSink);
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Http("https://api.example.com/logs")
+    .CreateLogger();
+```
+
+## Performance Benefits
+
+Batching provides several performance advantages:
+
+1. **Reduced Network Overhead**: Combine multiple events into single HTTP requests
+2. **Database Efficiency**: Insert multiple rows in a single transaction
+3. **Asynchronous Processing**: Events are buffered and processed without blocking the application
+4. **Automatic Retries**: Failed batches are retried with exponential backoff
+
+## Error Handling
+
+The `BatchingSink` infrastructure handles:
+- Exceptions from `EmitBatchAsync` (with retries)
+- Queue overflow (events are discarded when `QueueLimit` is exceeded)
+- Exponential backoff for failed batches
+- Logging failures to `SelfLog`
+
+<Tip>
+Don't implement your own retry logic in `EmitBatchAsync`. Let exceptions propagate and the batching infrastructure will handle retries automatically.
+</Tip>
+
+## Thread Safety
+
+The `BatchingSink` ensures thread-safe access to your `IBatchedLogEventSink` implementation. You don't need to implement additional synchronization unless you're sharing resources across multiple sink instances.
+
+## Related Interfaces
+
+- [ILogEventSink](/api/ilog-event-sink) - Interface for non-batched sinks
+- [LogEvent](/api/log-event) - The log event structure
+- [BatchingOptions](/advanced/batching) - Batching configuration options
+
+## See Also
+
+- [Creating Batched Sinks](/advanced/batching) - Detailed guide on implementing batched sinks
+- [Performance Guide](/guides/performance) - Performance optimization strategies
