@@ -1,0 +1,185 @@
+---
+title: "LoggerConfiguration Basics"
+description: "Understanding the core LoggerConfiguration API for building Serilog loggers"
+---
+
+The `LoggerConfiguration` class is the foundation for creating Serilog loggers. It provides a fluent API for configuring all aspects of logging behavior.
+
+## Creating a Logger
+
+<Steps>
+  <Step title="Instantiate LoggerConfiguration">
+    Create a new instance of `LoggerConfiguration` to begin configuring your logger.
+
+    ```csharp
+    var configuration = new LoggerConfiguration();
+    ```
+  </Step>
+
+  <Step title="Configure logging behavior">
+    Use the fluent API to configure sinks, minimum levels, enrichers, and more.
+
+    ```csharp
+    var configuration = new LoggerConfiguration()
+        .MinimumLevel.Information()
+        .WriteTo.Console();
+    ```
+  </Step>
+
+  <Step title="Create the logger">
+    Call `CreateLogger()` to build the configured logger instance.
+
+    ```csharp
+    Logger log = configuration.CreateLogger();
+    ```
+  </Step>
+</Steps>
+
+## Configuration Properties
+
+The `LoggerConfiguration` class exposes several configuration properties:
+
+### WriteTo
+
+Configures the sinks that log events will be emitted to. Returns a `LoggerSinkConfiguration` for fluent configuration.
+
+```csharp src/Serilog/LoggerConfiguration.cs
+var logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.File("log.txt")
+    .CreateLogger();
+```
+
+### MinimumLevel
+
+Configures the minimum level at which events will be passed to sinks. Default is `Information`.
+
+```csharp src/Serilog/LoggerConfiguration.cs
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Enrich
+
+Configures enrichment of log events. Enrichers can add, remove, and modify properties.
+
+```csharp src/Serilog/LoggerConfiguration.cs
+var logger = new LoggerConfiguration()
+    .Enrich.WithMachineName()
+    .Enrich.WithProperty("Application", "MyApp")
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Filter
+
+Configures global filtering of log events.
+
+```csharp src/Serilog/LoggerConfiguration.cs
+var logger = new LoggerConfiguration()
+    .Filter.ByExcluding(e => e.Level == LogEventLevel.Verbose)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Destructure
+
+Configures destructuring of message template parameters.
+
+```csharp src/Serilog/LoggerConfiguration.cs
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumDepth(5)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### AuditTo
+
+Configures sinks for auditing instead of regular logging. Exceptions from audit sinks propagate to the caller.
+
+```csharp src/Serilog/LoggerConfiguration.cs
+var logger = new LoggerConfiguration()
+    .AuditTo.Sink(new AuditSink())
+    .CreateLogger();
+```
+
+<Warning>
+Not all sinks support auditing requirements. Sinks must opt-in to auditing support.
+</Warning>
+
+### ReadFrom
+
+Applies external settings to the logger configuration.
+
+```csharp src/Serilog/LoggerConfiguration.cs
+var logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(configuration)
+    .CreateLogger();
+```
+
+## CreateLogger Method
+
+The `CreateLogger()` method builds and returns a configured `Logger` instance.
+
+```csharp src/Serilog/LoggerConfiguration.cs
+public Logger CreateLogger()
+```
+
+<Note>
+**Important Constraints:**
+- `CreateLogger()` can only be called once per `LoggerConfiguration` instance
+- Attempting to call it multiple times throws `InvalidOperationException`
+- The returned logger can be cast to `IDisposable` to free resources
+</Note>
+
+## Complete Example
+
+```csharp
+using Serilog;
+using Serilog.Events;
+
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("Application", "MyApp")
+    .WriteTo.Console()
+    .WriteTo.File("logs/myapp.txt", rollingInterval: RollingInterval.Day)
+    .CreateLogger();
+
+logger.Information("Application started");
+
+// When done, dispose to flush buffers
+((IDisposable)logger).Dispose();
+```
+
+## Method Chaining
+
+All configuration methods return the `LoggerConfiguration` instance, enabling fluent method chaining:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Information()  // Returns LoggerConfiguration
+    .WriteTo.Console()           // Returns LoggerConfiguration
+    .Enrich.FromLogContext()     // Returns LoggerConfiguration
+    .CreateLogger();             // Returns Logger
+```
+
+## Resource Management
+
+The logger manages disposable sinks internally. When you dispose the logger, all disposable sinks are automatically disposed:
+
+```csharp
+using (var logger = new LoggerConfiguration()
+    .WriteTo.File("log.txt")
+    .CreateLogger())
+{
+    logger.Information("This will be flushed on dispose");
+}
+```
+
+<Note>
+Contextual loggers (created via `ForContext`) do not dispose sinks - only the root logger does.
+</Note>

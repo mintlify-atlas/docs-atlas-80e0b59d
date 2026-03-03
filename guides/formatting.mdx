@@ -1,0 +1,466 @@
+---
+title: "Output Formatting"
+description: "Customizing log output with text templates and JSON formatters"
+---
+
+Serilog provides flexible formatting options to control how log events are rendered to output, from human-readable text to structured JSON.
+
+## ITextFormatter Interface
+
+All formatters implement `ITextFormatter`, which defines a single method:
+
+```csharp
+public interface ITextFormatter
+{
+    void Format(LogEvent logEvent, TextWriter output);
+}
+```
+
+Formatters are passed to sinks that accept them:
+
+```csharp
+var formatter = new JsonFormatter();
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.File(formatter, "log.json")
+    .CreateLogger();
+```
+
+## Message Template Formatting
+
+The `MessageTemplateTextFormatter` formats events using Serilog's message template syntax.
+
+### Basic Usage
+
+```csharp
+using Serilog.Formatting.Display;
+
+var formatter = new MessageTemplateTextFormatter(
+    "{Timestamp:yyyy-MM-dd HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console(formatter)
+    .CreateLogger();
+```
+
+**Output:**
+```
+2026-03-03 14:23:45 [INF] User logged in
+2026-03-03 14:23:46 [ERR] Connection failed
+System.Net.Http.HttpRequestException: Connection refused
+```
+
+### Template Tokens
+
+Built-in tokens for formatting log events:
+
+<CodeGroup>
+
+```text Timestamp
+{Timestamp:yyyy-MM-dd HH:mm:ss.fff}
+{Timestamp:o}  // ISO 8601
+{Timestamp:HH:mm:ss}
+```
+
+```text UtcTimestamp
+{UtcTimestamp:yyyy-MM-dd HH:mm:ss} 
+// Always UTC regardless of local time
+```
+
+```text Level
+{Level}      // Information
+{Level:u3}   // INF
+{Level:w}    // information (lowercase)
+{Level:u}    // INFORMATION (uppercase)
+```
+
+```text Message
+{Message}    // Standard rendering
+{Message:lj} // Literal JSON (escapes quotes)
+{Message:j}  // JSON (with quotes)
+```
+
+```text Exception
+{Exception}
+// Renders full exception with stack trace
+```
+
+```text Properties
+{Properties}
+// Renders all properties not in the message template
+```
+
+```text NewLine
+{NewLine}
+// Platform-specific newline
+```
+
+```text TraceId / SpanId
+{TraceId}
+{SpanId}
+// OpenTelemetry trace identifiers
+```
+
+</CodeGroup>
+
+### Property Formatting
+
+Access event properties directly in the template:
+
+```csharp
+var formatter = new MessageTemplateTextFormatter(
+    "[{RequestId}] {Message} ({Elapsed}ms)");
+
+using (LogContext.PushProperty("RequestId", "req-123"))
+{
+    Log.Information("Processed {Count} items in {Elapsed}ms", 42, 150);
+}
+```
+
+**Output:**
+```
+[req-123] Processed 42 items (150ms)
+```
+
+<Note>
+Properties that don't exist are skipped silently. This differs from message templates, which render missing properties as raw text.
+</Note>
+
+### Alignment and Formatting
+
+Use standard .NET format strings with alignment:
+
+```csharp
+var formatter = new MessageTemplateTextFormatter(
+    "{Timestamp:HH:mm:ss} [{Level,11}] {Message}");
+```
+
+**Output:**
+```
+14:23:45 [Information] User logged in
+14:23:46 [      Error] Connection failed
+```
+
+<CodeGroup>
+
+```text Right-align
+{Level,11}  // Right-aligned, 11 characters wide
+```
+
+```text Left-align
+{Level,-11} // Left-aligned, 11 characters wide
+```
+
+</CodeGroup>
+
+### String Property Casing
+
+Apply casing transformations to string properties:
+
+```csharp
+var formatter = new MessageTemplateTextFormatter(
+    "{Level:u} {Username:w} {Action:u}");
+
+Log.Information("User {Username} performed {Action}", "Alice", "Login");
+```
+
+**Output:**
+```
+INFORMATION alice LOGIN
+```
+
+- `:u` - Uppercase
+- `:w` - Lowercase
+
+## JSON Formatting
+
+The `JsonFormatter` outputs events as JSON objects.
+
+### Basic Usage
+
+```csharp
+using Serilog.Formatting.Json;
+
+var formatter = new JsonFormatter(
+    closingDelimiter: Environment.NewLine,
+    renderMessage: true);
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.File(formatter, "log.json")
+    .CreateLogger();
+```
+
+**Output:**
+```json
+{"Timestamp":"2026-03-03T14:23:45.1234567+00:00","Level":"Information","MessageTemplate":"User {Username} logged in","RenderedMessage":"User Alice logged in","Properties":{"Username":"Alice"}}
+```
+
+### Constructor Options
+
+<CodeGroup>
+
+```csharp closingDelimiter
+new JsonFormatter(
+    closingDelimiter: Environment.NewLine)
+// String written after each event (default: newline)
+```
+
+```csharp renderMessage
+new JsonFormatter(
+    renderMessage: true)
+// Include RenderedMessage field (default: false)
+```
+
+```csharp formatProvider
+new JsonFormatter(
+    formatProvider: CultureInfo.InvariantCulture)
+// Culture for formatting values
+```
+
+</CodeGroup>
+
+### JSON Structure
+
+Standard fields in JSON output:
+
+```json
+{
+  "Timestamp": "2026-03-03T14:23:45.1234567+00:00",
+  "Level": "Information",
+  "MessageTemplate": "Processed {Count} items",
+  "RenderedMessage": "Processed 42 items",  // If renderMessage: true
+  "TraceId": "0af7651916cd43dd8448eb211c80319c",  // If present
+  "SpanId": "b7ad6b7169203331",  // If present
+  "Exception": "System.Exception: Error...",  // If present
+  "Properties": {
+    "Count": 42,
+    "RequestId": "req-123"
+  },
+  "Renderings": {  // Format-specific renderings
+    "Count": [{
+      "Format": "000",
+      "Rendering": "042"
+    }]
+  }
+}
+```
+
+<Tip>
+For production logs that will be parsed by log aggregators, prefer JSON formatting for easier querying and analysis.
+</Tip>
+
+## Compact JSON Formatting
+
+For more efficient JSON output, use formatters from `Serilog.Formatting.Compact`:
+
+```bash
+dotnet add package Serilog.Formatting.Compact
+```
+
+```csharp
+using Serilog.Formatting.Compact;
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.File(new CompactJsonFormatter(), "log.clef")
+    .CreateLogger();
+```
+
+**Benefits:**
+- Smaller output size
+- Single-line JSON per event
+- Standardized format (CLEF)
+- Better performance
+
+<Note>
+The Compact Log Event Format (CLEF) is optimized for ingestion by log servers like Seq, Elasticsearch, and others.
+</Note>
+
+## Expression Templates
+
+For advanced formatting scenarios, use `Serilog.Expressions`:
+
+```bash
+dotnet add package Serilog.Expressions
+```
+
+```csharp
+using Serilog.Templates;
+
+var template = new ExpressionTemplate(
+    "[{@t:HH:mm:ss} {@l:u3}] {@m}\n{@x}");
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console(template)
+    .CreateLogger();
+```
+
+**Features:**
+- More powerful than message templates
+- Conditional formatting
+- Computed values
+- Function calls
+
+<Tip>
+New code should prefer `ExpressionTemplate` from `Serilog.Expressions` over `MessageTemplateTextFormatter` for better flexibility.
+</Tip>
+
+## Custom Formatters
+
+Create custom formatters for specialized output:
+
+```csharp
+public class CustomFormatter : ITextFormatter
+{
+    public void Format(LogEvent logEvent, TextWriter output)
+    {
+        output.Write($"[{logEvent.Timestamp:HH:mm:ss}] ");
+        output.Write($"{logEvent.Level}: ");
+        output.Write(logEvent.RenderMessage());
+        
+        foreach (var property in logEvent.Properties)
+        {
+            output.Write($" {property.Key}={property.Value}");
+        }
+        
+        if (logEvent.Exception != null)
+        {
+            output.Write($"\n{logEvent.Exception}");
+        }
+        
+        output.WriteLine();
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console(new CustomFormatter())
+    .CreateLogger();
+```
+
+### Accessing Log Event Data
+
+<CodeGroup>
+
+```csharp Timestamp
+logEvent.Timestamp          // DateTimeOffset
+logEvent.Timestamp.UtcDateTime
+```
+
+```csharp Level
+logEvent.Level              // LogEventLevel enum
+```
+
+```csharp Message
+logEvent.MessageTemplate    // MessageTemplate
+logEvent.RenderMessage()    // Rendered string
+```
+
+```csharp Properties
+logEvent.Properties         // IReadOnlyDictionary<string, LogEventPropertyValue>
+```
+
+```csharp Exception
+logEvent.Exception          // Exception or null
+```
+
+```csharp Trace Info
+logEvent.TraceId            // ActivityTraceId?
+logEvent.SpanId             // ActivitySpanId?
+```
+
+</CodeGroup>
+
+## Common Patterns
+
+### Development vs Production
+
+```csharp
+var isDevelopment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development";
+
+var configuration = new LoggerConfiguration();
+
+if (isDevelopment)
+{
+    // Human-readable for development
+    configuration.WriteTo.Console()
+        .WriteTo.Debug();
+}
+else
+{
+    // Structured JSON for production
+    configuration.WriteTo.Console(new JsonFormatter())
+        .WriteTo.File(new CompactJsonFormatter(), "log.clef");
+}
+
+Log.Logger = configuration.CreateLogger();
+```
+
+### Multi-format Output
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()  // Human-readable
+    .WriteTo.File(
+        new JsonFormatter(),
+        "log.json")     // JSON for parsing
+    .WriteTo.File(
+        new CompactJsonFormatter(),
+        "log.clef")     // Compact for ingestion
+    .CreateLogger();
+```
+
+### Colored Console Output
+
+Use `Serilog.Sinks.Console` with themes:
+
+```bash
+dotnet add package Serilog.Sinks.Console
+```
+
+```csharp
+using Serilog.Sinks.SystemConsole.Themes;
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console(
+        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}",
+        theme: AnsiConsoleTheme.Code)
+    .CreateLogger();
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Use JSON in production">
+JSON formatters make logs machine-readable and easier to query in log aggregation systems.
+</Step>
+
+<Step title="Include timestamps in UTC">
+Use `{UtcTimestamp}` or format `{Timestamp}` with UTC to avoid timezone confusion.
+</Step>
+
+<Step title="Keep templates consistent">
+Standardize output templates across your application for easier parsing and readability.
+</Step>
+
+<Step title="Minimize property rendering">
+Only include properties you need - each property adds to output size.
+</Step>
+
+<Step title="Consider compact formats">
+For high-volume logging, use `CompactJsonFormatter` to reduce storage and bandwidth.
+</Step>
+
+</Steps>
+
+## Performance Considerations
+
+- **Message templates** are faster than string interpolation
+- **JSON formatters** have higher overhead than text formatters
+- **Compact JSON** is more efficient than standard JSON
+- **Custom formatters** can be optimized for specific scenarios
+- **Avoid complex formatting** in high-throughput paths
+
+<Warning>
+Formatting happens synchronously during log emission. Keep formatters lightweight to avoid blocking application threads.
+</Warning>

@@ -1,0 +1,417 @@
+---
+title: IDestructuringPolicy
+description: Interface for customizing how complex objects are converted to log event properties
+---
+
+The `IDestructuringPolicy` interface allows you to control how Serilog converts complex objects into structured log event properties. Custom destructuring policies enable special handling for specific types, providing fine-grained control over how objects are serialized in logs.
+
+## Interface Definition
+
+```csharp
+public interface IDestructuringPolicy
+{
+    bool TryDestructure(
+        object value,
+        ILogEventPropertyValueFactory propertyValueFactory,
+        [NotNullWhen(true)] out LogEventPropertyValue? result);
+}
+```
+
+## Methods
+
+### TryDestructure
+
+Attempts to destructure the provided value according to the policy's rules.
+
+```csharp
+bool TryDestructure(
+    object value,
+    ILogEventPropertyValueFactory propertyValueFactory,
+    out LogEventPropertyValue? result)
+```
+
+<ParamField path="value" type="object" required>
+  The value to destructure. This is the object being logged that needs to be converted into a structured representation.
+</ParamField>
+
+<ParamField path="propertyValueFactory" type="ILogEventPropertyValueFactory" required>
+  Factory for recursively applying policies to destructure additional values. Use this to destructure nested objects or properties while maintaining consistent policy application.
+</ParamField>
+
+<ParamField path="result" type="LogEventPropertyValue?" required>
+  When the method returns `true`, contains the destructured value. When the method returns `false`, this will be `null`.
+</ParamField>
+
+<ParamField path="returns" type="bool">
+  Returns `true` if the value could be destructured under this policy. Returns `false` if this policy doesn't handle the given type, allowing other policies to attempt destructuring.
+</ParamField>
+
+## Implementation Guidance
+
+When implementing `IDestructuringPolicy`, consider the following:
+
+### Type Checking
+
+Quickly determine if your policy handles the given type:
+
+```csharp
+public bool TryDestructure(
+    object value,
+    ILogEventPropertyValueFactory propertyValueFactory,
+    out LogEventPropertyValue? result)
+{
+    if (value is not MyCustomType customValue)
+    {
+        result = null;
+        return false;
+    }
+    
+    // Handle the custom type
+    result = CreatePropertyValue(customValue);
+    return true;
+}
+```
+
+### Recursive Destructuring
+
+Use the property value factory for nested objects:
+
+```csharp
+var nestedProperty = propertyValueFactory.CreatePropertyValue(nestedObject, destructureObjects: true);
+```
+
+### Performance Considerations
+
+- Keep type checking fast using pattern matching or `is` checks
+- Avoid reflection when possible for frequently logged types
+- Cache expensive computations or metadata
+- Consider the cost of destructuring vs. simple ToString()
+
+### Thread Safety
+
+Policies must be thread-safe as they may be called concurrently from multiple threads. Avoid mutable state or use proper synchronization.
+
+### Security Considerations
+
+Be careful not to expose sensitive data when destructuring:
+- Filter out password, token, or credential properties
+- Mask or redact sensitive information
+- Consider compliance requirements (PII, GDPR, etc.)
+
+## Example Implementations
+
+### Custom Type Destructuring
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+
+public class PersonDestructuringPolicy : IDestructuringPolicy
+{
+    public bool TryDestructure(
+        object value,
+        ILogEventPropertyValueFactory propertyValueFactory,
+        [NotNullWhen(true)] out LogEventPropertyValue? result)
+    {
+        if (value is not Person person)
+        {
+            result = null;
+            return false;
+        }
+        
+        var properties = new List<LogEventProperty>
+        {
+            new LogEventProperty("Id", new ScalarValue(person.Id)),
+            new LogEventProperty("Name", new ScalarValue(person.FullName)),
+            new LogEventProperty("Age", new ScalarValue(person.Age))
+        };
+        
+        result = new StructureValue(properties);
+        return true;
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .Destructure.With<PersonDestructuringPolicy>()
+    .WriteTo.Console()
+    .CreateLogger();
+
+var person = new Person { Id = 1, FirstName = "John", LastName = "Doe", Age = 30 };
+Log.Information("User: {@Person}", person);
+// Output includes: Id, Name (computed), Age
+```
+
+### Sensitive Data Masking
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+using System.Reflection;
+
+public class SensitiveDataPolicy : IDestructuringPolicy
+{
+    private readonly HashSet<string> _sensitiveProperties = new HashSet<string>
+    {
+        "Password", "Token", "Secret", "ApiKey", "CreditCard"
+    };
+    
+    public bool TryDestructure(
+        object value,
+        ILogEventPropertyValueFactory propertyValueFactory,
+        [NotNullWhen(true)] out LogEventPropertyValue? result)
+    {
+        if (value == null)
+        {
+            result = null;
+            return false;
+        }
+        
+        var type = value.GetType();
+        
+        // Only handle types that might have sensitive properties
+        if (type.IsPrimitive || type == typeof(string))
+        {
+            result = null;
+            return false;
+        }
+        
+        var properties = new List<LogEventProperty>();
+        
+        foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var propertyValue = prop.GetValue(value);
+            
+            if (_sensitiveProperties.Contains(prop.Name))
+            {
+                properties.Add(new LogEventProperty(prop.Name, new ScalarValue("***REDACTED***")));
+            }
+            else if (propertyValue != null)
+            {
+                var destructured = propertyValueFactory.CreatePropertyValue(propertyValue, destructureObjects: true);
+                properties.Add(new LogEventProperty(prop.Name, destructured));
+            }
+        }
+        
+        result = new StructureValue(properties);
+        return true;
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .Destructure.With<SensitiveDataPolicy>()
+    .WriteTo.Console()
+    .CreateLogger();
+
+var credentials = new { Username = "john", Password = "secret123" };
+Log.Information("Login attempt: {@Credentials}", credentials);
+// Output: Username: "john", Password: "***REDACTED***"
+```
+
+### Collection Limiting Policy
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+
+public class CollectionLimitingPolicy : IDestructuringPolicy
+{
+    private readonly int _maxElements;
+    
+    public CollectionLimitingPolicy(int maxElements = 10)
+    {
+        _maxElements = maxElements;
+    }
+    
+    public bool TryDestructure(
+        object value,
+        ILogEventPropertyValueFactory propertyValueFactory,
+        [NotNullWhen(true)] out LogEventPropertyValue? result)
+    {
+        if (value is not IEnumerable enumerable || value is string)
+        {
+            result = null;
+            return false;
+        }
+        
+        var elements = enumerable.Cast<object>()
+            .Take(_maxElements)
+            .Select(e => propertyValueFactory.CreatePropertyValue(e, destructureObjects: true))
+            .ToList();
+        
+        result = new SequenceValue(elements);
+        return true;
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .Destructure.With(new CollectionLimitingPolicy(maxElements: 5))
+    .WriteTo.Console()
+    .CreateLogger();
+
+var largeList = Enumerable.Range(1, 1000).ToList();
+Log.Information("Items: {@Items}", largeList);
+// Output: Only first 5 items logged
+```
+
+### Type-Specific Formatting
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System;
+using System.Diagnostics.CodeAnalysis;
+
+public class DateTimePolicy : IDestructuringPolicy
+{
+    public bool TryDestructure(
+        object value,
+        ILogEventPropertyValueFactory propertyValueFactory,
+        [NotNullWhen(true)] out LogEventPropertyValue? result)
+    {
+        if (value is not DateTime dateTime)
+        {
+            result = null;
+            return false;
+        }
+        
+        // Format DateTime in ISO 8601 format
+        result = new ScalarValue(dateTime.ToString("O"));
+        return true;
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .Destructure.With<DateTimePolicy>()
+    .WriteTo.Console()
+    .CreateLogger();
+
+Log.Information("Event occurred: {@Timestamp}", DateTime.UtcNow);
+// Output: Timestamp in ISO 8601 format
+```
+
+### Interface Implementation Policy
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+
+public interface ILoggable
+{
+    IDictionary<string, object> ToLogProperties();
+}
+
+public class LoggablePolicy : IDestructuringPolicy
+{
+    public bool TryDestructure(
+        object value,
+        ILogEventPropertyValueFactory propertyValueFactory,
+        [NotNullWhen(true)] out LogEventPropertyValue? result)
+    {
+        if (value is not ILoggable loggable)
+        {
+            result = null;
+            return false;
+        }
+        
+        var properties = new List<LogEventProperty>();
+        
+        foreach (var kvp in loggable.ToLogProperties())
+        {
+            var propertyValue = propertyValueFactory.CreatePropertyValue(kvp.Value, destructureObjects: true);
+            properties.Add(new LogEventProperty(kvp.Key, propertyValue));
+        }
+        
+        result = new StructureValue(properties, value.GetType().Name);
+        return true;
+    }
+}
+
+// Usage
+public class Order : ILoggable
+{
+    public int Id { get; set; }
+    public string CustomerName { get; set; }
+    public decimal Total { get; set; }
+    
+    public IDictionary<string, object> ToLogProperties()
+    {
+        return new Dictionary<string, object>
+        {
+            ["OrderId"] = Id,
+            ["Customer"] = CustomerName,
+            ["Amount"] = Total
+        };
+    }
+}
+
+Log.Logger = new LoggerConfiguration()
+    .Destructure.With<LoggablePolicy>()
+    .WriteTo.Console()
+    .CreateLogger();
+
+var order = new Order { Id = 123, CustomerName = "ACME Corp", Total = 599.99m };
+Log.Information("Order placed: {@Order}", order);
+```
+
+## Configuration Methods
+
+Destructuring policies can be added using the `Destructure` configuration object:
+
+```csharp
+// Add a specific policy instance
+Log.Logger = new LoggerConfiguration()
+    .Destructure.With(new CollectionLimitingPolicy(maxElements: 5))
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Add a policy by type (requires parameterless constructor)
+Log.Logger = new LoggerConfiguration()
+    .Destructure.With<SensitiveDataPolicy>()
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Chain multiple policies
+Log.Logger = new LoggerConfiguration()
+    .Destructure.With<SensitiveDataPolicy>()
+    .Destructure.With<DateTimePolicy>()
+    .Destructure.With(new CollectionLimitingPolicy(10))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Policy Ordering
+
+Policies are evaluated in the order they're configured. The first policy that returns `true` from `TryDestructure()` determines how the object is serialized. Subsequent policies are not consulted for that object.
+
+## Built-in Destructuring Options
+
+Serilog provides several built-in destructuring helpers:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .Destructure.ToMaximumDepth(4)           // Limit nesting depth
+    .Destructure.ToMaximumStringLength(100)  // Truncate long strings
+    .Destructure.ToMaximumCollectionCount(10) // Limit collection sizes
+    .CreateLogger();
+```
+
+## Related Interfaces
+
+- `ILogEventPropertyValueFactory` - Factory for creating property values with destructuring
+- `ILogEventEnricher` - For adding properties to log events
+- `ILogEventPropertyFactory` - For creating properties in enrichers

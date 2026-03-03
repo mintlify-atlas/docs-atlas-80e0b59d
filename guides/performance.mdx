@@ -1,0 +1,441 @@
+---
+title: "Performance Guide"
+description: "Optimizing Serilog for high-throughput and low-latency scenarios"
+---
+
+Serilog is designed for high performance, but understanding its internals helps you optimize for demanding workloads.
+
+## Core Performance Characteristics
+
+- **Message templates** avoid string allocation during formatting
+- **Async-first batching** reduces I/O overhead
+- **Bounded queues** prevent memory exhaustion under load
+- **Lock-free data structures** minimize contention
+- **Zero-allocation paths** for common operations
+
+## Measurement
+
+Before optimizing, measure your logging performance:
+
+```csharp
+using System.Diagnostics;
+
+var sw = Stopwatch.StartNew();
+var iterations = 1_000_000;
+
+for (int i = 0; i < iterations; i++)
+{
+    Log.Information("Test message {Number}", i);
+}
+
+sw.Stop();
+Console.WriteLine($"{iterations / sw.Elapsed.TotalSeconds:N0} events/sec");
+```
+
+<Tip>
+Use BenchmarkDotNet for accurate performance testing:
+```bash
+dotnet add package BenchmarkDotNet
+```
+</Tip>
+
+## Message Template Optimization
+
+### Avoid String Interpolation
+
+<CodeGroup>
+
+```csharp ❌ Slow - String allocation
+Log.Information($"User {userId} logged in");
+// String is created even if log level is disabled
+```
+
+```csharp ✅ Fast - Message template
+Log.Information("User {UserId} logged in", userId);
+// No allocation if log level is disabled
+```
+
+</CodeGroup>
+
+### Reuse Templates
+
+Parsing message templates has cost - reuse them:
+
+```csharp
+// ❌ Parses template on every call
+for (int i = 0; i < 1000; i++)
+{
+    Log.Information("Processing item {Index}", i);
+}
+
+// ✅ Template is parsed once and cached internally
+// Serilog caches up to 1000 templates by default
+```
+
+### Keep Properties Simple
+
+```csharp
+// ❌ Complex object graph
+Log.Information("User data: {@User}", complexUserObject);
+// Serialization has overhead
+
+// ✅ Simple properties
+Log.Information("User {UserId} {Username}", user.Id, user.Name);
+// Minimal allocation
+```
+
+<Note>
+Destructuring (`@`) serializes the entire object graph. Use it selectively.
+</Note>
+
+## Level Checks
+
+Manually check levels for expensive operations:
+
+```csharp
+// ❌ Expensive operation always runs
+Log.Debug("Data: {Data}", ExpensiveOperation());
+
+// ✅ Skip expensive operation if Debug is disabled
+if (Log.IsEnabled(LogEventLevel.Debug))
+{
+    Log.Debug("Data: {Data}", ExpensiveOperation());
+}
+```
+
+## Batching and Buffering
+
+### Use Batching for Network Sinks
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Sink(
+        new HttpSink("https://api.example.com"),
+        new BatchingOptions
+        {
+            BatchSizeLimit = 100,
+            BufferingTimeLimit = TimeSpan.FromSeconds(2),
+            QueueLimit = 10000
+        })
+    .CreateLogger();
+```
+
+**Benefits:**
+- Reduces network roundtrips
+- Amortizes connection overhead
+- Improves throughput significantly
+
+### Configure Queue Limits
+
+```csharp
+new BatchingOptions
+{
+    QueueLimit = 10000,  // Drop events when exceeded
+    // Or null for unbounded (use with caution)
+}
+```
+
+<Warning>
+Unbounded queues can cause memory issues under extreme load. Always set `QueueLimit` in production.
+</Warning>
+
+## Async Sinks
+
+Use `Serilog.Sinks.Async` to make any sink non-blocking:
+
+```bash
+dotnet add package Serilog.Sinks.Async
+```
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Async(a => a.File("log.txt"), 
+        bufferSize: 10000)
+    .CreateLogger();
+```
+
+**When to use:**
+- Wrapping slow sinks (file, database)
+- Preventing logging from blocking application threads
+- High-throughput scenarios
+
+<Tip>
+`BatchingSink` provides async behavior for batched operations. Use `Serilog.Sinks.Async` for non-batched sinks.
+</Tip>
+
+## Filtering
+
+### Apply Filters Early
+
+```csharp
+// ✅ Filter before enrichment and formatting
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .Filter.ByExcluding(evt => evt.Level < LogEventLevel.Warning)
+    .Enrich.WithThreadId()  // Only enriches events that pass filter
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Per-Sink Filtering
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console(
+        restrictedToMinimumLevel: LogEventLevel.Information)
+    .WriteTo.File("errors.txt",
+        restrictedToMinimumLevel: LogEventLevel.Error)
+    .CreateLogger();
+```
+
+## Enrichment Performance
+
+### Avoid Expensive Enrichers
+
+```csharp
+// ❌ Expensive enrichment on every event
+public class SlowEnricher : ILogEventEnricher
+{
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory factory)
+    {
+        var data = CallExternalAPI();  // Network call!
+        logEvent.AddPropertyIfAbsent(
+            factory.CreateProperty("Data", data));
+    }
+}
+
+// ✅ Compute once, enrich many
+var cachedData = CallExternalAPI();
+Log.Logger = new LoggerConfiguration()
+    .Enrich.WithProperty("Data", cachedData)
+    .CreateLogger();
+```
+
+### LogContext Performance
+
+LogContext uses `AsyncLocal<T>` which has minimal overhead:
+
+```csharp
+// Efficient - properties flow through async
+using (LogContext.PushProperty("RequestId", requestId))
+{
+    await ProcessRequestAsync();
+}
+```
+
+<Note>
+Each property in LogContext adds a small cost per log event. Keep the property count reasonable (< 10).
+</Note>
+
+## Formatting Performance
+
+### Choose Appropriate Formatters
+
+**Performance ranking (fastest to slowest):**
+
+1. No formatter (raw sink)
+2. `MessageTemplateTextFormatter`
+3. `CompactJsonFormatter`
+4. `JsonFormatter`
+5. Complex `ExpressionTemplate`
+
+```csharp
+// For high-throughput file logging
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.File(
+        new CompactJsonFormatter(),
+        "log.clef")
+    .CreateLogger();
+```
+
+## Memory Management
+
+### Bounded Queue Sizes
+
+```csharp
+new BatchingOptions
+{
+    QueueLimit = 10000,
+    BatchSizeLimit = 100
+}
+// Maximum memory: ~10000 events queued
+// Each event is ~1-10KB depending on content
+```
+
+### Event Retention
+
+```csharp
+// Events are not held in memory after emission
+Log.Information("Message");
+// LogEvent is eligible for GC immediately after sinks process it
+```
+
+### Destructuring Limits
+
+Configure limits to prevent excessive memory usage:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .Destructure.ToMaximumDepth(3)
+    .Destructure.ToMaximumStringLength(1000)
+    .Destructure.ToMaximumCollectionCount(10)
+    .CreateLogger();
+```
+
+## High-Throughput Configuration
+
+Optimal setup for millions of events per second:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .Enrich.FromLogContext()
+    .WriteTo.Async(a => a.File(
+        new CompactJsonFormatter(),
+        "log.clef",
+        rollingInterval: RollingInterval.Hour,
+        buffered: true),
+        bufferSize: 10000)
+    .CreateLogger();
+```
+
+<Steps>
+
+<Step title="Set appropriate minimum level">
+Filter verbose logs at the source to reduce processing.
+</Step>
+
+<Step title="Use async wrapper">
+Prevent logging from blocking application threads.
+</Step>
+
+<Step title="Enable buffering">
+File sinks with `buffered: true` reduce I/O syscalls.
+</Step>
+
+<Step title="Use efficient formatters">
+`CompactJsonFormatter` balances structure and performance.
+</Step>
+
+<Step title="Configure buffer sizes">
+Larger buffers reduce overhead but increase memory usage.
+</Step>
+
+</Steps>
+
+## Low-Latency Configuration
+
+Optimal setup for minimal logging overhead:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Warning()  // Log only important events
+    .WriteTo.Async(a => a.Console(),
+        bufferSize: 1000)
+    .CreateLogger();
+```
+
+<Tip>
+For the absolute lowest latency, consider writing to memory-mapped files or ring buffers, then processing asynchronously.
+</Tip>
+
+## Benchmarking Results
+
+Typical performance on modern hardware:
+
+| Scenario | Throughput |
+|----------|------------|
+| Discarded (below min level) | ~50M events/sec |
+| Console (unbuffered) | ~100K events/sec |
+| File (buffered) | ~1M events/sec |
+| Async file (batched) | ~5M events/sec |
+| Batched HTTP | ~50K events/sec |
+
+<Note>
+Actual performance varies significantly based on hardware, event size, and formatter complexity.
+</Note>
+
+## Troubleshooting Performance
+
+### Identify Bottlenecks
+
+```csharp
+var sw = Stopwatch.StartNew();
+
+Log.Information("Test");
+
+if (sw.ElapsedMilliseconds > 10)
+{
+    Console.WriteLine($"Slow logging: {sw.ElapsedMilliseconds}ms");
+}
+```
+
+### Profile with Diagnostics
+
+```csharp
+using System.Diagnostics;
+
+var listener = new ActivityListener
+{
+    ShouldListenTo = source => source.Name.StartsWith("Serilog"),
+    Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+    ActivityStopped = activity =>
+    {
+        Console.WriteLine($"{activity.DisplayName}: {activity.Duration.TotalMilliseconds}ms");
+    }
+};
+
+ActivitySource.AddActivityListener(listener);
+```
+
+### Check Queue Saturation
+
+Monitor if events are being dropped:
+
+```csharp
+var listener = new MetricsFailureListener();
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Fallible(
+        wt => wt.Async(a => a.File("log.txt")),
+        listener)
+    .CreateLogger();
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Always use message templates">
+Never use string interpolation or concatenation for log messages.
+</Step>
+
+<Step title="Set minimum levels appropriately">
+Avoid verbose logging in production. Use `Information` or `Warning` as baseline.
+</Step>
+
+<Step title="Batch network sinks">
+Use `BatchingOptions` for all remote logging destinations.
+</Step>
+
+<Step title="Configure bounded queues">
+Always set `QueueLimit` to prevent memory issues under load.
+</Step>
+
+<Step title="Use async wrappers">
+Prevent logging from blocking application threads with `Async` sink.
+</Step>
+
+<Step title="Check levels for expensive operations">
+Use `Log.IsEnabled()` before expensive serialization or computation.
+</Step>
+
+<Step title="Measure before optimizing">
+Profile your specific workload to identify actual bottlenecks.
+</Step>
+
+</Steps>
+
+<Warning>
+Premature optimization can make code harder to maintain. Start with good defaults, then optimize based on measurements.
+</Warning>

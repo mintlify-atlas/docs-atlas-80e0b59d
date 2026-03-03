@@ -1,0 +1,478 @@
+---
+title: Log Filtering
+description: Learn how to control which log events are written using Serilog's filtering system
+---
+
+Filtering allows you to control which log events are written to sinks based on criteria beyond just the log level. Filters can inspect the entire log event, including properties, level, message, and exception, to decide whether an event should be written or suppressed.
+
+## Why Filter Logs?
+
+Log filtering helps you:
+- Reduce log volume and storage costs
+- Remove noisy or redundant events
+- Route different events to different sinks
+- Exclude sensitive information
+- Focus on specific scenarios during troubleshooting
+
+## Level-Based Filtering
+
+The simplest form of filtering is setting a minimum log level:
+
+```csharp
+var log = new LoggerConfiguration()
+    .MinimumLevel.Information()  // Filter out Verbose and Debug
+    .WriteTo.Console()
+    .CreateLogger();
+
+Log.Debug("This won't be written");
+Log.Information("This will be written");
+```
+
+### Per-Sink Level Filtering
+
+Apply different level filters to different sinks:
+
+```csharp
+var log = new LoggerConfiguration()
+    .MinimumLevel.Verbose()  // Allow all events
+    .WriteTo.Console(
+        restrictedToMinimumLevel: LogEventLevel.Information)  // Console: Info+
+    .WriteTo.File("debug.log",
+        restrictedToMinimumLevel: LogEventLevel.Debug)  // File: Debug+
+    .WriteTo.Seq("http://localhost:5341",
+        restrictedToMinimumLevel: LogEventLevel.Verbose)  // Seq: All events
+    .CreateLogger();
+```
+
+### Override by Namespace
+
+Reduce noise from specific namespaces:
+
+```csharp
+var log = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
+    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Microsoft.* logs only Information+
+// Microsoft.EntityFrameworkCore.* logs only Warning+
+// System.* logs only Warning+
+// Everything else logs Debug+
+```
+
+## The ILogEventFilter Interface
+
+For more advanced filtering, implement the `ILogEventFilter` interface (`Core/ILogEventFilter.cs:20-29`):
+
+```csharp
+public interface ILogEventFilter
+{
+    bool IsEnabled(LogEvent logEvent);
+}
+```
+
+The filter returns:
+- `true` - Event should be written
+- `false` - Event should be suppressed
+
+From the source code (`Core/Sinks/FilteringSink.cs:17-50`), filters are applied before sinks:
+
+```csharp
+class FilteringSink : ILogEventSink
+{
+    readonly ILogEventSink _sink;
+    readonly ILogEventFilter[] _filters;
+
+    public void Emit(LogEvent logEvent)
+    {
+        foreach (var logEventFilter in _filters)
+        {
+            if (!logEventFilter.IsEnabled(logEvent))
+                return;  // Event suppressed
+        }
+        
+        _sink.Emit(logEvent);  // Event passed all filters
+    }
+}
+```
+
+## Filter Expression Syntax
+
+Serilog provides a rich filtering syntax through the `Serilog.Filters.Expressions` package:
+
+```csharp
+using Serilog.Filters;
+
+var log = new LoggerConfiguration()
+    .Filter.ByExcluding("@Level = 'Debug' and SourceContext = 'MyApp.Noisy'")
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Filter by Level
+
+```csharp
+// Exclude all Debug events
+.Filter.ByExcluding("@Level = 'Debug'")
+
+// Include only Error and Fatal
+.Filter.ByIncludingOnly("@Level in ['Error', 'Fatal']")
+
+// Exclude Information from specific source
+.Filter.ByExcluding("@Level = 'Information' and SourceContext = 'MyApp.Verbose'")
+```
+
+### Filter by Property
+
+```csharp
+// Exclude events with specific user
+.Filter.ByExcluding("UserId = 'system'")
+
+// Include only production events
+.Filter.ByIncludingOnly("Environment = 'Production'")
+
+// Exclude health check requests
+.Filter.ByExcluding("RequestPath = '/health'")
+
+// Include slow requests only
+.Filter.ByIncludingOnly("ElapsedMilliseconds > 1000")
+```
+
+### Filter by Message Template
+
+```csharp
+// Exclude specific message template
+.Filter.ByExcluding("@MessageTemplate = 'Cache hit for {Key}'")
+
+// Include messages matching pattern
+.Filter.ByIncludingOnly("@MessageTemplate like '%database%'")
+```
+
+### Complex Expressions
+
+```csharp
+// Exclude debug events from Microsoft or System namespaces
+.Filter.ByExcluding(
+    "@Level = 'Debug' and (StartsWith(SourceContext, 'Microsoft') or StartsWith(SourceContext, 'System'))")
+
+// Include only errors with specific conditions
+.Filter.ByIncludingOnly(
+    "@Level >= 'Error' or (RequestPath like '/api/%' and ElapsedMilliseconds > 500)")
+
+// Exclude common, low-value events
+.Filter.ByExcluding(
+    "(@MessageTemplate = 'Cache hit for {Key}') or " +
+    "(@MessageTemplate = 'Configuration loaded') or " +
+    "(RequestPath in ['/health', '/metrics', '/ready'])")
+```
+
+## Programmatic Filtering
+
+Use lambda expressions for custom filtering logic:
+
+### ByExcluding
+
+Exclude events matching a predicate:
+
+```csharp
+var log = new LoggerConfiguration()
+    .Filter.ByExcluding(logEvent => 
+        logEvent.Level == LogEventLevel.Debug &&
+        logEvent.Properties.ContainsKey("SourceContext") &&
+        logEvent.Properties["SourceContext"].ToString().Contains("Microsoft"))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### ByIncludingOnly
+
+Include only events matching a predicate:
+
+```csharp
+var log = new LoggerConfiguration()
+    .Filter.ByIncludingOnly(logEvent => 
+        logEvent.Level >= LogEventLevel.Warning ||
+        logEvent.Properties.ContainsKey("Critical"))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Filter by Exception Type
+
+```csharp
+var log = new LoggerConfiguration()
+    .Filter.ByExcluding(logEvent => 
+        logEvent.Exception is TaskCanceledException)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Filter by Property Value
+
+```csharp
+var log = new LoggerConfiguration()
+    .Filter.ByExcluding(logEvent => 
+    {
+        if (logEvent.Properties.TryGetValue("RequestPath", out var path))
+        {
+            var pathStr = path.ToString().Trim('"');
+            return pathStr == "/health" || pathStr == "/metrics";
+        }
+        return false;
+    })
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Per-Sink Filtering
+
+Apply different filters to different sinks:
+
+```csharp
+var log = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.Logger(lc => lc
+        .Filter.ByIncludingOnly(e => e.Level >= LogEventLevel.Warning)
+        .WriteTo.File("warnings.log"))  // Only warnings and above
+    .WriteTo.Logger(lc => lc
+        .Filter.ByIncludingOnly("@MessageTemplate like '%slow%'")
+        .WriteTo.File("performance.log"))  // Only performance-related events
+    .CreateLogger();
+```
+
+## Practical Filtering Examples
+
+### Exclude Health Checks
+
+```csharp
+var log = new LoggerConfiguration()
+    .Filter.ByExcluding(e => 
+        e.Properties.TryGetValue("RequestPath", out var path) &&
+        (path.ToString().Contains("/health") || 
+         path.ToString().Contains("/ready") ||
+         path.ToString().Contains("/live")))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Reduce Entity Framework Noise
+
+```csharp
+var log = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Database.Command", 
+        LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Infrastructure",
+        LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Include Only Business Events
+
+```csharp
+var log = new LoggerConfiguration()
+    .WriteTo.Logger(lc => lc
+        .Filter.ByIncludingOnly(e => 
+            e.Properties.ContainsKey("OrderId") ||
+            e.Properties.ContainsKey("CustomerId") ||
+            e.Properties.ContainsKey("TransactionId"))
+        .WriteTo.Seq("http://localhost:5341"))
+    .WriteTo.Console()  // All events to console
+    .CreateLogger();
+```
+
+### Filter by Time-Based Conditions
+
+```csharp
+var log = new LoggerConfiguration()
+    .Filter.ByExcluding(e => 
+    {
+        // Exclude verbose events during business hours
+        if (e.Level < LogEventLevel.Information)
+        {
+            var hour = DateTime.Now.Hour;
+            return hour >= 9 && hour < 17;  // 9 AM to 5 PM
+        }
+        return false;
+    })
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Sample Frequent Events
+
+```csharp
+public class SamplingFilter : ILogEventFilter
+{
+    readonly int _keepEveryNth;
+    int _counter;
+
+    public SamplingFilter(int keepEveryNth)
+    {
+        _keepEveryNth = keepEveryNth;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        // Keep every Nth event, suppress others
+        return Interlocked.Increment(ref _counter) % _keepEveryNth == 0;
+    }
+}
+
+// Use it:
+var log = new LoggerConfiguration()
+    .WriteTo.Logger(lc => lc
+        .Filter.ByIncludingOnly("@MessageTemplate = 'Cache access'")
+        .Filter.With(new SamplingFilter(keepEveryNth: 100))  // Keep 1 in 100
+        .WriteTo.File("cache-sample.log"))
+    .WriteTo.Console()  // All other events
+    .CreateLogger();
+```
+
+## Dynamic Filtering
+
+Implement filters that can be updated at runtime:
+
+```csharp
+public class DynamicLevelFilter : ILogEventFilter
+{
+    public LogEventLevel MinimumLevel { get; set; } = LogEventLevel.Information;
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        return logEvent.Level >= MinimumLevel;
+    }
+}
+
+var dynamicFilter = new DynamicLevelFilter();
+
+var log = new LoggerConfiguration()
+    .Filter.With(dynamicFilter)
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Later, change the filter:
+dynamicFilter.MinimumLevel = LogEventLevel.Debug;  // Temporarily enable debug
+
+// Process requests...
+
+dynamicFilter.MinimumLevel = LogEventLevel.Information;  // Return to normal
+```
+
+## Best Practices
+
+### 1. Filter Early
+
+Filter at the logger configuration level when possible to avoid creating events that will be suppressed:
+
+<CodeGroup>
+
+```csharp Good
+// Events are not created if level is disabled
+var log = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+```csharp Less Efficient
+// Events are created and then filtered
+var log = new LoggerConfiguration()
+    .MinimumLevel.Verbose()
+    .Filter.ByExcluding(e => e.Level < LogEventLevel.Information)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+</CodeGroup>
+
+### 2. Use Namespace Overrides for Framework Logs
+
+```csharp
+var log = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
+    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### 3. Combine Multiple Filters
+
+Filters are applied in order. Use this to build complex logic:
+
+```csharp
+var log = new LoggerConfiguration()
+    // First, include only relevant events
+    .Filter.ByIncludingOnly(e => 
+        e.Level >= LogEventLevel.Information ||
+        e.Properties.ContainsKey("Important"))
+    // Then, exclude health checks
+    .Filter.ByExcluding("RequestPath = '/health'")
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### 4. Test Your Filters
+
+Ensure filters work as expected:
+
+```csharp
+[Fact]
+public void HealthCheckRequestsAreFiltered()
+{
+    var events = new List<LogEvent>();
+    var sink = new DelegatingSink(events.Add);
+    
+    var log = new LoggerConfiguration()
+        .Filter.ByExcluding("RequestPath = '/health'")
+        .WriteTo.Sink(sink)
+        .CreateLogger();
+    
+    log.Information("Request to {RequestPath}", "/health");
+    log.Information("Request to {RequestPath}", "/api/users");
+    
+    Assert.Single(events);  // Only /api/users logged
+    Assert.Contains("/api/users", events[0].RenderMessage());
+}
+```
+
+### 5. Monitor Filter Impact
+
+Log when filters suppress significant events:
+
+```csharp
+public class MonitoredFilter : ILogEventFilter
+{
+    readonly ILogEventFilter _innerFilter;
+    int _suppressedCount;
+
+    public MonitoredFilter(ILogEventFilter innerFilter)
+    {
+        _innerFilter = innerFilter;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        var result = _innerFilter.IsEnabled(logEvent);
+        if (!result)
+        {
+            var count = Interlocked.Increment(ref _suppressedCount);
+            if (count % 1000 == 0)
+            {
+                // Report every 1000 suppressions
+                Console.WriteLine($"Filter has suppressed {count} events");
+            }
+        }
+        return result;
+    }
+}
+```
+
+<Note>
+Filtering is powerful but use it judiciously. Over-filtering can hide important diagnostic information. Always ensure critical errors and business events are never filtered.
+</Note>

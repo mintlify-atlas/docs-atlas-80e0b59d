@@ -1,0 +1,313 @@
+---
+title: "LogContext"
+description: "Holds ambient properties that can be attached to log events using AsyncLocal scope"
+---
+
+## Overview
+
+The `LogContext` class provides a way to attach ambient properties to log events within a specific scope. Properties pushed onto the context are preserved across async/await calls using AsyncLocal and are automatically included in all log events within that scope.
+
+```csharp
+public static class LogContext
+```
+
+**Namespace:** `Serilog.Context`
+
+## Configuration
+
+To enable LogContext enrichment, configure your logger using `Enrich.FromLogContext()`:
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Methods
+
+### PushProperty
+
+Push a property onto the context, returning an `IDisposable` that must be disposed to remove the property.
+
+```csharp
+public static IDisposable PushProperty(
+    string name, 
+    object? value, 
+    bool destructureObjects = false
+)
+```
+
+<ParamField path="name" type="string" required>
+  The name of the property to add to the context
+</ParamField>
+
+<ParamField path="value" type="object?">
+  The value of the property
+</ParamField>
+
+<ParamField path="destructureObjects" type="bool" default="false">
+  If `true`, non-primitive, non-array types will be converted to structures; otherwise, unknown types are converted to scalars (generally strings)
+</ParamField>
+
+<ResponseField name="return" type="IDisposable">
+  A token that must be disposed to pop the property back off the stack
+</ResponseField>
+
+**Example:**
+
+```csharp
+using (LogContext.PushProperty("UserId", userId))
+{
+    Log.Information("User logged in");
+    // The UserId property will be attached to this event
+}
+```
+
+**With destructuring:**
+
+```csharp
+var order = new Order { Id = 123, Total = 99.99m };
+
+using (LogContext.PushProperty("Order", order, destructureObjects: true))
+{
+    Log.Information("Processing order");
+    // The Order object will be destructured and attached
+}
+```
+
+### Push (Single Enricher)
+
+Push an enricher onto the context.
+
+```csharp
+public static IDisposable Push(ILogEventEnricher enricher)
+```
+
+<ParamField path="enricher" type="ILogEventEnricher" required>
+  An enricher to push onto the log context
+</ParamField>
+
+<ResponseField name="return" type="IDisposable">
+  A token that must be disposed to pop the enricher back off the stack
+</ResponseField>
+
+**Example:**
+
+```csharp
+var enricher = new PropertyEnricher("RequestId", requestId);
+
+using (LogContext.Push(enricher))
+{
+    Log.Information("Handling request");
+}
+```
+
+### Push (Multiple Enrichers - Array)
+
+Push multiple enrichers onto the context.
+
+```csharp
+public static IDisposable Push(params ILogEventEnricher[] enrichers)
+```
+
+<ParamField path="enrichers" type="ILogEventEnricher[]" required>
+  Array of enrichers to push onto the log context
+</ParamField>
+
+<ResponseField name="return" type="IDisposable">
+  A token that must be disposed to pop the enrichers back off the stack
+</ResponseField>
+
+**Example:**
+
+```csharp
+using (LogContext.Push(
+    new PropertyEnricher("UserId", userId),
+    new PropertyEnricher("SessionId", sessionId)
+))
+{
+    Log.Information("User action");
+}
+```
+
+### Push (Multiple Enrichers - Span)
+
+Push multiple enrichers from a ReadOnlySpan onto the context.
+
+```csharp
+public static IDisposable Push(params ReadOnlySpan<ILogEventEnricher> enrichers)
+```
+
+<ParamField path="enrichers" type="ReadOnlySpan<ILogEventEnricher>" required>
+  Span of enrichers to push onto the log context
+</ParamField>
+
+<ResponseField name="return" type="IDisposable">
+  A token that must be disposed to pop the enrichers back off the stack
+</ResponseField>
+
+### Push (Multiple Enrichers - IEnumerable)
+
+Push multiple enrichers from an enumerable collection onto the context.
+
+```csharp
+public static IDisposable Push(params IEnumerable<ILogEventEnricher> enrichers)
+```
+
+<ParamField path="enrichers" type="IEnumerable<ILogEventEnricher>" required>
+  Enumerable collection of enrichers to push onto the log context
+</ParamField>
+
+<ResponseField name="return" type="IDisposable">
+  A token that must be disposed to pop the enrichers back off the stack
+</ResponseField>
+
+### Clone
+
+Obtain an enricher that represents the current contents of the LogContext. This can be pushed onto the context in a different location or thread.
+
+```csharp
+public static ILogEventEnricher Clone()
+```
+
+<ResponseField name="return" type="ILogEventEnricher">
+  An enricher that represents the current contents of the LogContext
+</ResponseField>
+
+**Example:**
+
+```csharp
+ILogEventEnricher contextSnapshot;
+
+using (LogContext.PushProperty("UserId", userId))
+{
+    contextSnapshot = LogContext.Clone();
+}
+
+// Later, in a different thread or scope
+using (LogContext.Push(contextSnapshot))
+{
+    Log.Information("This event will have the UserId property");
+}
+```
+
+### Suspend
+
+Remove all enrichers from the LogContext, returning an `IDisposable` that restores the previous state when disposed.
+
+```csharp
+public static IDisposable Suspend()
+```
+
+<ResponseField name="return" type="IDisposable">
+  A token that must be disposed to restore properties back to the stack
+</ResponseField>
+
+**Example:**
+
+```csharp
+using (LogContext.PushProperty("UserId", userId))
+{
+    Log.Information("Has UserId property");
+    
+    using (LogContext.Suspend())
+    {
+        Log.Information("UserId property is suspended");
+    }
+    
+    Log.Information("UserId property is restored");
+}
+```
+
+### Reset
+
+Remove all enrichers from LogContext for the current async scope. Unlike `Suspend()`, this does not provide a way to restore the context.
+
+```csharp
+public static void Reset()
+```
+
+**Example:**
+
+```csharp
+using (LogContext.PushProperty("UserId", userId))
+{
+    Log.Information("Has UserId property");
+    
+    LogContext.Reset();
+    
+    Log.Information("UserId property is gone");
+}
+```
+
+## Usage Patterns
+
+### Nested Contexts
+
+Properties can be nested and will be properly cleaned up when disposed:
+
+```csharp
+using (LogContext.PushProperty("UserId", userId))
+{
+    Log.Information("User context started");
+    
+    using (LogContext.PushProperty("OrderId", orderId))
+    {
+        Log.Information("Processing order");
+        // Both UserId and OrderId are available
+    }
+    
+    Log.Information("Order context ended");
+    // Only UserId is available
+}
+```
+
+### Async/Await Support
+
+LogContext uses AsyncLocal, so properties flow naturally across async boundaries:
+
+```csharp
+using (LogContext.PushProperty("RequestId", requestId))
+{
+    Log.Information("Starting async operation");
+    
+    await ProcessAsync();
+    
+    Log.Information("Completed async operation");
+    // RequestId is still available
+}
+
+async Task ProcessAsync()
+{
+    Log.Information("Inside async method");
+    // RequestId is available here too
+}
+```
+
+### Web Request Scoping
+
+Common pattern for web applications:
+
+```csharp
+app.Use(async (context, next) =>
+{
+    var requestId = Guid.NewGuid().ToString();
+    
+    using (LogContext.PushProperty("RequestId", requestId))
+    using (LogContext.PushProperty("RequestPath", context.Request.Path))
+    {
+        await next();
+    }
+});
+```
+
+## Important Notes
+
+<Note>
+  Properties must be popped from the same thread/logical call context where they were pushed. Always use the `using` pattern to ensure proper cleanup.
+</Note>
+
+<Warning>
+  You must configure the logger with `.Enrich.FromLogContext()` for properties to be attached to log events.
+</Warning>

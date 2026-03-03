@@ -1,80 +1,332 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get started with Serilog in minutes with this step-by-step guide
 ---
 
-## Get started in three steps
+Get up and running with Serilog in just a few minutes. This guide will walk you through installing Serilog and creating your first structured log events.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+- .NET 6.0 or later (or .NET Framework 4.6.2+)
+- A .NET project (console app, ASP.NET Core, etc.)
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+## Installation
+
+<Steps>
+  <Step title="Install Serilog core package">
+    Install the main Serilog package:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    <CodeGroup>
+    ```bash .NET CLI
+    dotnet add package Serilog
+    ```
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    ```bash Package Manager
+    Install-Package Serilog
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```xml PackageReference
+    <PackageReference Include="Serilog" Version="4.*" />
+    ```
+    </CodeGroup>
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Install sinks">
+    Install one or more sinks to output your logs. For this quickstart, we'll use the Console and File sinks:
+    
+    <CodeGroup>
+    ```bash .NET CLI
+    dotnet add package Serilog.Sinks.Console
+    dotnet add package Serilog.Sinks.File
+    ```
+    
+    ```bash Package Manager
+    Install-Package Serilog.Sinks.Console
+    Install-Package Serilog.Sinks.File
+    ```
+    </CodeGroup>
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Configure the logger">
+    Create and configure your logger in `Program.cs`:
+    
+    ```csharp
+    using Serilog;
 
-### Step 3: Go live
+    Log.Logger = new LoggerConfiguration()
+        .WriteTo.Console()
+        .WriteTo.File("logs/app.log",
+            rollingInterval: RollingInterval.Day,
+            rollOnFileSizeLimit: true)
+        .CreateLogger();
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    try
+    {
+        Log.Information("Application starting up");
+        
+        // Your application code here
+        
+        Log.Information("Application shutting down");
+    }
+    catch (Exception ex)
+    {
+        Log.Fatal(ex, "Application terminated unexpectedly");
+    }
+    finally
+    {
+        await Log.CloseAndFlushAsync();
+    }
+    ```
+  </Step>
+</Steps>
 
-## Next steps
+## Your First Structured Log
 
-Now that you have your docs running, explore these key features:
+The power of Serilog comes from structured logging with message templates:
 
-<CardGroup cols={2}>
+```csharp
+// Simple message
+Log.Information("Hello, Serilog!");
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+// With properties (captured as structured data)
+var name = "World";
+Log.Information("Hello, {Name}!", name);
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+// With multiple properties
+var user = "Alice";
+var elapsed = 42;
+Log.Information("User {User} completed operation in {Elapsed} ms", user, elapsed);
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+// Destructuring complex objects with @
+var position = new { Latitude = 25.5, Longitude = -134.2 };
+Log.Information("Received position {@Position}", position);
+```
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+The `@` operator tells Serilog to serialize the object rather than calling `ToString()` on it.
 
-</CardGroup>
+## Understanding the API
+
+### LoggerConfiguration
+
+The `LoggerConfiguration` class is used to configure loggers. From `src/Serilog/LoggerConfiguration.cs:20`:
+
+```csharp
+public class LoggerConfiguration
+{
+    public LoggerSinkConfiguration WriteTo { get; }
+    public LoggerMinimumLevelConfiguration MinimumLevel { get; }
+    public LoggerEnrichmentConfiguration Enrich { get; }
+    public LoggerFilterConfiguration Filter { get; }
+    
+    public Logger CreateLogger() { }
+}
+```
+
+Key configuration options:
+- **WriteTo**: Configure sinks (where logs go)
+- **MinimumLevel**: Set the minimum log level
+- **Enrich**: Add properties to all events
+- **Filter**: Filter log events
+
+### Log Levels
+
+Serilog provides six log levels, defined in `src/Serilog/Events/LogEventLevel.cs`:
+
+<Tabs>
+  <Tab title="Information">
+    Use for general informational messages about application flow:
+    
+    ```csharp
+    Log.Information("User {UserId} logged in", userId);
+    ```
+  </Tab>
+  
+  <Tab title="Warning">
+    Use for unexpected but recoverable situations:
+    
+    ```csharp
+    Log.Warning("Disk space low: {FreeSpace} GB remaining", freeSpace);
+    ```
+  </Tab>
+  
+  <Tab title="Error">
+    Use for errors and exceptions:
+    
+    ```csharp
+    try
+    {
+        ProcessOrder(order);
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Failed to process order {OrderId}", order.Id);
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Debug">
+    Use for diagnostic information:
+    
+    ```csharp
+    Log.Debug("Loading configuration from {Path}", configPath);
+    ```
+  </Tab>
+</Tabs>
+
+## Message Template Patterns
+
+### Capturing Properties
+
+```csharp
+// Named properties (recommended)
+Log.Information("User {UserId} from {Country}", "alice", "US");
+
+// Positional properties
+Log.Information("User {0} from {1}", "alice", "US");
+```
+
+### Destructuring Operators
+
+```csharp
+// @ destructures objects (serializes structure)
+var user = new User { Id = 1, Name = "Alice" };
+Log.Information("Created user {@User}", user);
+// Output: Created user {"Id": 1, "Name": "Alice"}
+
+// $ stringifies (calls ToString)
+Log.Information("Created user {$User}", user);
+// Output: Created user "User: Alice"
+
+// No operator (captures scalar value)
+Log.Information("Created user {User}", user);
+// Output: Created user User: Alice
+```
+
+## Using ILogger Interface
+
+For dependency injection scenarios, use the `ILogger` interface from `src/Serilog/ILogger.cs`:
+
+```csharp
+public class OrderService
+{
+    private readonly ILogger _logger;
+    
+    public OrderService(ILogger logger)
+    {
+        _logger = logger.ForContext<OrderService>();
+    }
+    
+    public void ProcessOrder(Order order)
+    {
+        _logger.Information("Processing order {OrderId}", order.Id);
+        
+        // ... process order ...
+        
+        _logger.Information("Order {OrderId} completed in {Elapsed} ms", 
+            order.Id, elapsed);
+    }
+}
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+The `ForContext<T>()` method enriches all log events from this logger with the source context (the type name).
 </Note>
+
+## ASP.NET Core Integration
+
+For ASP.NET Core applications, configure Serilog in `Program.cs`:
+
+```csharp
+using Serilog;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Configure Serilog
+builder.Host.UseSerilog((context, services, configuration) => configuration
+    .ReadFrom.Configuration(context.Configuration)
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File("logs/app.log", rollingInterval: RollingInterval.Day));
+
+var app = builder.Build();
+
+// Use Serilog request logging
+app.UseSerilogRequestLogging();
+
+app.Run();
+```
+
+Then configure log levels in `appsettings.json`:
+
+```json
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "System": "Warning"
+      }
+    }
+  }
+}
+```
+
+## Common Patterns
+
+### Contextual Logging
+
+Add properties to all events within a scope:
+
+```csharp
+using Serilog.Context;
+
+using (LogContext.PushProperty("CorrelationId", correlationId))
+{
+    // All log events in this scope will include CorrelationId
+    Log.Information("Processing request");
+}
+```
+
+### Type-Specific Loggers
+
+Create loggers specific to a type for better filtering:
+
+```csharp
+var logger = Log.ForContext<MyService>();
+logger.Information("Service started");
+// Includes SourceContext property: "MyService"
+```
+
+### Conditional Logging
+
+Check if a level is enabled before expensive operations:
+
+```csharp
+if (Log.IsEnabled(LogEventLevel.Debug))
+{
+    var diagnostics = GatherExpensiveDiagnostics();
+    Log.Debug("Diagnostics: {@Diagnostics}", diagnostics);
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts/structured-logging">
+    Learn about structured logging and message templates
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration/basics">
+    Deep dive into logger configuration options
+  </Card>
+  
+  <Card title="Sinks" icon="plug" href="/guides/sinks">
+    Explore the extensive sink ecosystem
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api/ilogger">
+    Browse the complete API documentation
+  </Card>
+</CardGroup>

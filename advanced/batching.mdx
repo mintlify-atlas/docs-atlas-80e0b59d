@@ -1,0 +1,423 @@
+---
+title: Batched Sink Implementation
+description: Build high-performance batched sinks using IBatchedLogEventSink and BatchingSink for efficient log event processing
+---
+
+Batched sinks process multiple log events together, significantly improving performance for I/O-intensive operations like network requests or database writes. Serilog provides built-in infrastructure for batching with automatic retry logic and failure handling.
+
+## The IBatchedLogEventSink Interface
+
+Batched sinks implement the `IBatchedLogEventSink` interface:
+
+```csharp
+public interface IBatchedLogEventSink
+{
+    /// <summary>
+    /// Emit a batch of log events, asynchronously.
+    /// </summary>
+    /// <param name="batch">The batch of events to emit.</param>
+    Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch);
+
+    /// <summary>
+    /// Allows sinks to perform periodic work without requiring additional threads.
+    /// </summary>
+    Task OnEmptyBatchAsync();
+}
+```
+
+<Note>
+Implementers should allow exceptions to propagate when batches fail. The batching infrastructure handles exception handling, diagnostics, and retries.
+</Note>
+
+## Basic Batched Sink
+
+Here's a simple HTTP-based batched sink:
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+
+public class HttpBatchedSink : IBatchedLogEventSink, IDisposable
+{
+    private readonly HttpClient _httpClient;
+    private readonly string _endpoint;
+
+    public HttpBatchedSink(string endpoint)
+    {
+        _endpoint = endpoint;
+        _httpClient = new HttpClient();
+    }
+
+    public async Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch)
+    {
+        var events = batch.Select(logEvent => new
+        {
+            Timestamp = logEvent.Timestamp,
+            Level = logEvent.Level.ToString(),
+            Message = logEvent.RenderMessage(),
+            Exception = logEvent.Exception?.ToString(),
+            Properties = logEvent.Properties
+        });
+
+        var json = JsonSerializer.Serialize(events);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync(_endpoint, content);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task OnEmptyBatchAsync()
+    {
+        // Optional: Perform periodic work like health checks
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        _httpClient?.Dispose();
+    }
+}
+```
+
+## Using BatchingSink
+
+Wrap your batched sink with `BatchingSink` to get automatic batching:
+
+```csharp
+using Serilog.Configuration;
+using Serilog.Core.Sinks.Batching;
+
+public static class HttpSinkExtensions
+{
+    public static LoggerConfiguration Http(
+        this LoggerSinkConfiguration sinkConfiguration,
+        string endpoint,
+        int batchSizeLimit = 100,
+        TimeSpan? bufferingTimeLimit = null)
+    {
+        var batchedSink = new HttpBatchedSink(endpoint);
+        
+        var options = new BatchingOptions
+        {
+            BatchSizeLimit = batchSizeLimit,
+            BufferingTimeLimit = bufferingTimeLimit ?? TimeSpan.FromSeconds(2),
+            QueueLimit = 100000,
+            EagerlyEmitFirstEvent = true
+        };
+
+        var batchingSink = new BatchingSink(batchedSink, options);
+        
+        return sinkConfiguration.Sink(batchingSink);
+    }
+}
+```
+
+Usage:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.Http("https://logs.example.com/api/events")
+    .CreateLogger();
+```
+
+## BatchingOptions Configuration
+
+The `BatchingOptions` class controls batching behavior:
+
+```csharp
+public class BatchingOptions
+{
+    /// <summary>
+    /// Eagerly emit a batch containing the first received event.
+    /// Default: true
+    /// </summary>
+    public bool EagerlyEmitFirstEvent { get; set; } = true;
+
+    /// <summary>
+    /// Maximum number of events to include in a single batch.
+    /// Default: 1000
+    /// </summary>
+    public int BatchSizeLimit { get; set; } = 1000;
+
+    /// <summary>
+    /// Maximum delay between event batches.
+    /// Default: 2 seconds
+    /// </summary>
+    public TimeSpan BufferingTimeLimit { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Maximum events to hold in the internal queue.
+    /// Default: 100000
+    /// </summary>
+    public int? QueueLimit { get; set; } = 100000;
+
+    /// <summary>
+    /// Maximum time to keep retrying failed batches.
+    /// Default: 10 minutes
+    /// </summary>
+    public TimeSpan RetryTimeLimit { get; set; } = TimeSpan.FromMinutes(10);
+}
+```
+
+<Steps>
+
+<Step title="BatchSizeLimit">
+When the batch reaches this size, it's immediately sent regardless of time.
+</Step>
+
+<Step title="BufferingTimeLimit">
+Maximum time to wait before sending a partial batch.
+</Step>
+
+<Step title="QueueLimit">
+When exceeded, new events are dropped. Set to `null` for unbounded queuing.
+</Step>
+
+<Step title="EagerlyEmitFirstEvent">
+Improves perceived responsiveness in interactive scenarios.
+</Step>
+
+<Step title="RetryTimeLimit">
+After this duration, failed batches are dropped.
+</Step>
+
+</Steps>
+
+## Failure Handling and Retries
+
+The `BatchingSink` automatically handles failures with exponential backoff:
+
+```csharp
+class FailureAwareBatchScheduler
+{
+    private static readonly TimeSpan MinimumBackoffPeriod = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaximumBackoffInterval = TimeSpan.FromMinutes(1);
+    private const int DroppedBatchesBeforeDroppingQueue = 10;
+
+    public void MarkFailure(out bool shouldDropBatch, out bool shouldDropQueue)
+    {
+        // Exponential backoff: 2x, 4x, 8x, etc.
+        var backoffFactor = Math.Pow(2, _failuresSinceSuccessfulBatch - 1);
+        
+        // Drop batch if retry time limit exceeded
+        shouldDropBatch = wouldRetryAt >= _retryTimeLimit;
+        
+        // Drop entire queue after too many consecutive failures
+        shouldDropQueue = _consecutiveDroppedBatches >= DroppedBatchesBeforeDroppingQueue;
+    }
+}
+```
+
+<Warning>
+After 10 consecutive dropped batches, the entire queue is drained to prevent memory exhaustion.
+</Warning>
+
+## Database Batched Sink Example
+
+Write log events to a database in batches:
+
+```csharp
+using System.Data.SqlClient;
+
+public class SqlServerBatchedSink : IBatchedLogEventSink, IDisposable
+{
+    private readonly string _connectionString;
+
+    public SqlServerBatchedSink(string connectionString)
+    {
+        _connectionString = connectionString;
+    }
+
+    public async Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        using var transaction = connection.BeginTransaction();
+        try
+        {
+            foreach (var logEvent in batch)
+            {
+                using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = @"
+                    INSERT INTO Logs (Timestamp, Level, Message, Exception, Properties)
+                    VALUES (@Timestamp, @Level, @Message, @Exception, @Properties)";
+
+                command.Parameters.AddWithValue("@Timestamp", logEvent.Timestamp);
+                command.Parameters.AddWithValue("@Level", logEvent.Level.ToString());
+                command.Parameters.AddWithValue("@Message", logEvent.RenderMessage());
+                command.Parameters.AddWithValue("@Exception", 
+                    (object)logEvent.Exception?.ToString() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@Properties", 
+                    JsonSerializer.Serialize(logEvent.Properties));
+
+                await command.ExecuteNonQueryAsync();
+            }
+
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    public Task OnEmptyBatchAsync()
+    {
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        // Cleanup resources if needed
+    }
+}
+```
+
+## OnEmptyBatchAsync Implementation
+
+Use `OnEmptyBatchAsync` for periodic maintenance:
+
+```csharp
+public class MaintenanceAwareSink : IBatchedLogEventSink
+{
+    private DateTime _lastHealthCheck = DateTime.UtcNow;
+    private readonly TimeSpan _healthCheckInterval = TimeSpan.FromMinutes(5);
+
+    public async Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch)
+    {
+        // Send batch to remote service
+    }
+
+    public async Task OnEmptyBatchAsync()
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastHealthCheck >= _healthCheckInterval)
+        {
+            await PerformHealthCheckAsync();
+            _lastHealthCheck = now;
+        }
+    }
+
+    private async Task PerformHealthCheckAsync()
+    {
+        // Verify connection to remote service
+        // Rotate files
+        // Clean up old data
+    }
+}
+```
+
+## Async Disposal
+
+For sinks with async cleanup requirements:
+
+```csharp
+public class AsyncBatchedSink : IBatchedLogEventSink, IAsyncDisposable
+{
+    private readonly HttpClient _httpClient;
+
+    public async Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch)
+    {
+        // Emit batch
+    }
+
+    public Task OnEmptyBatchAsync() => Task.CompletedTask;
+
+    public async ValueTask DisposeAsync()
+    {
+        // Flush any remaining data
+        await FlushAsync();
+        
+        _httpClient?.Dispose();
+    }
+
+    private async Task FlushAsync()
+    {
+        // Send final batch
+    }
+}
+```
+
+<Note>
+The `BatchingSink` automatically calls `DisposeAsync` if your sink implements `IAsyncDisposable`.
+</Note>
+
+## Performance Best Practices
+
+<Steps>
+
+<Step title="Choose appropriate batch sizes">
+Larger batches (500-1000 events) reduce overhead but increase latency. Smaller batches (50-100) provide faster feedback.
+</Step>
+
+<Step title="Use connection pooling">
+Reuse HTTP clients and database connections across batches.
+</Step>
+
+<Step title="Optimize serialization">
+Cache serialization logic and reuse buffers when possible.
+</Step>
+
+<Step title="Set reasonable queue limits">
+Unbounded queues can cause memory issues. Set `QueueLimit` based on your memory constraints.
+</Step>
+
+<Step title="Tune retry timeouts">
+Lower `RetryTimeLimit` in high-load scenarios to prevent excessive buffering.
+</Step>
+
+</Steps>
+
+## Testing Batched Sinks
+
+Test your batched sink implementation:
+
+```csharp
+[Fact]
+public async Task EmitBatchAsync_SendsAllEvents()
+{
+    var receivedEvents = new List<LogEvent>();
+    var sink = new TestBatchedSink(receivedEvents);
+    
+    var events = new[]
+    {
+        CreateLogEvent("Event 1"),
+        CreateLogEvent("Event 2"),
+        CreateLogEvent("Event 3")
+    };
+
+    await sink.EmitBatchAsync(events);
+
+    Assert.Equal(3, receivedEvents.Count);
+}
+
+private class TestBatchedSink : IBatchedLogEventSink
+{
+    private readonly List<LogEvent> _received;
+
+    public TestBatchedSink(List<LogEvent> received)
+    {
+        _received = received;
+    }
+
+    public Task EmitBatchAsync(IReadOnlyCollection<LogEvent> batch)
+    {
+        _received.AddRange(batch);
+        return Task.CompletedTask;
+    }
+
+    public Task OnEmptyBatchAsync() => Task.CompletedTask;
+}
+```
+
+## Next Steps
+
+- Learn about [creating custom sinks](/advanced/creating-sinks)
+- Understand [logger lifecycle and disposal](/advanced/lifecycle)
+- Explore [creating custom enrichers](/advanced/creating-enrichers)

@@ -1,0 +1,298 @@
+---
+title: Message Templates
+description: Learn how Serilog's message templates capture both human-readable messages and structured data
+---
+
+Message templates are at the heart of Serilog's structured logging approach. They provide a format for log messages that is both human-readable and machine-parseable, allowing you to capture structured data alongside descriptive text.
+
+## Message Template Syntax
+
+A message template is a format string with named placeholders (called "holes") surrounded by curly braces:
+
+```csharp
+Log.Information("User {UserName} logged in at {LoginTime}", userName, loginTime);
+```
+
+The template `"User {UserName} logged in at {LoginTime}"` contains two placeholders:
+- `{UserName}` - will be replaced with the value of the `userName` parameter
+- `{LoginTime}` - will be replaced with the value of the `loginTime` parameter
+
+## Property Capture
+
+When you write a log event, Serilog captures the parameters as structured properties. From the source code, the `MessageTemplate` class (`Events/MessageTemplate.cs:22`) represents the parsed template:
+
+```csharp
+public class MessageTemplate
+{
+    public string Text { get; }  // The raw template text
+    public IEnumerable<MessageTemplateToken> Tokens { get; }  // Parsed tokens
+}
+```
+
+Each placeholder becomes a `PropertyToken` that captures:
+- Property name
+- Format string (optional)
+- Alignment (optional)
+- Destructuring hint (optional)
+
+## Named vs Positional Properties
+
+<CodeGroup>
+
+```csharp Named Properties (Recommended)
+Log.Information("User {UserName} logged in from {IpAddress}", 
+    userName, ipAddress);
+```
+
+```csharp Positional Properties
+// Positional - works but not recommended
+Log.Information("User {0} logged in from {1}", 
+    userName, ipAddress);
+```
+
+</CodeGroup>
+
+<Info>
+Named properties are strongly recommended because they:
+- Make code more readable
+- Create better structured data
+- Enable semantic querying
+</Info>
+
+## Destructuring Operators
+
+Serilog provides three ways to control how objects are captured using destructuring operators:
+
+### Default Capture (`{Property}`)
+
+Captures simple types as-is, and complex objects using their `ToString()` method:
+
+```csharp
+var user = new User { Id = 123, Name = "Alice" };
+Log.Information("Created user {User}", user);
+// Property: User = "User { Id = 123, Name = Alice }"
+```
+
+### Destructuring (`{@Property}`)
+
+The `@` operator tells Serilog to serialize the object's structure:
+
+```csharp
+var user = new User { Id = 123, Name = "Alice" };
+Log.Information("Created user {@User}", user);
+// Property: User = { Id: 123, Name: "Alice" }
+```
+
+This creates a structured representation where each public property becomes a nested property in the log event.
+
+<Note>
+Destructuring is defined in the `Destructuring` enum (`Parsing/Destructuring.cs:21-37`):
+- `Default`: Convert known types to scalars
+- `Destructure`: Serialize objects into structures (prefix with `@`)
+- `Stringify`: Force string representation (prefix with `$`)
+</Note>
+
+### Stringification (`{$Property}`)
+
+The `$` operator forces stringification, calling `ToString()` explicitly:
+
+```csharp
+var dictionary = new Dictionary<string, int> { ["a"] = 1, ["b"] = 2 };
+Log.Information("Dictionary is {$Dict}", dictionary);
+// Property: Dict = "System.Collections.Generic.Dictionary`2[System.String,System.Int32]"
+```
+
+Useful when you want the string representation rather than the structure.
+
+## Format Strings
+
+You can apply format strings to control how values are rendered:
+
+```csharp
+Log.Information("Order total is {Amount:C}", 99.95m);
+// Renders as: "Order total is $99.95"
+
+Log.Information("Processing started at {StartTime:yyyy-MM-dd HH:mm:ss}", DateTime.Now);
+// Renders as: "Processing started at 2024-03-03 10:30:00"
+
+Log.Information("Percentage: {Value:P2}", 0.856);
+// Renders as: "Percentage: 85.60%"
+```
+
+Format strings use standard .NET formatting conventions and are specified after a colon (`:`) in the placeholder.
+
+## Alignment
+
+Control the width and alignment of rendered values:
+
+```csharp
+// Right-align in 10 characters
+Log.Information("|{Value,10}|", 42);
+// Output: |        42|
+
+// Left-align in 10 characters  
+Log.Information("|{Value,-10}|", 42);
+// Output: |42        |
+
+// Combine alignment and format
+Log.Information("{Amount,15:C}", 1234.56m);
+// Output: "      $1,234.56"
+```
+
+From the `PropertyToken` implementation (`Parsing/PropertyToken.cs:20-88`):
+
+```csharp
+public sealed class PropertyToken : MessageTemplateToken
+{
+    public string PropertyName { get; }
+    public Destructuring Destructuring { get; }
+    public string? Format { get; }
+    public Alignment? Alignment { get; }
+    // ...
+}
+```
+
+## Escaping Braces
+
+Double the braces to include literal curly braces in output:
+
+```csharp
+Log.Information("JSON: {{\"key\": {Value}}}", "value");
+// Output: "JSON: {\"key\": \"value\"}"
+
+Log.Information("Set is {{{SetName}}}", "alpha");
+// Output: "Set is {alpha}"
+```
+
+## Template Parsing
+
+Serilog parses message templates using the `MessageTemplateParser` class (`Parsing/MessageTemplateParser.cs:21`). The parser:
+
+1. Tokenizes the template into `TextToken` and `PropertyToken` objects
+2. Validates property names (must start with letter or `_`, can contain letters, digits, `_`, and `.` for nested properties)
+3. Parses format strings and alignment specifications
+4. Detects destructuring hints (`@`, `$`)
+
+<CodeGroup>
+
+```csharp Simple Template
+// Template: "Hello, {Name}!"
+// Tokens: [TextToken("Hello, "), PropertyToken("Name"), TextToken("!")]
+Log.Information("Hello, {Name}!", "World");
+```
+
+```csharp Complex Template
+// Multiple tokens with format and alignment
+Log.Information("User {UserId,5} paid {Amount:C} at {Time:HH:mm}",
+    userId, amount, timestamp);
+```
+
+```csharp With Destructuring
+// Destructuring operator included in PropertyToken
+Log.Information("Request {@Request} from {IpAddress}", 
+    request, ipAddress);
+```
+
+</CodeGroup>
+
+## Best Practices
+
+### 1. Use Semantic Property Names
+
+<CodeGroup>
+
+```csharp Good
+Log.Information("Processing order {OrderId} for customer {CustomerId}",
+    orderId, customerId);
+```
+
+```csharp Avoid
+Log.Information("Processing order {0} for customer {1}",
+    orderId, customerId);
+```
+
+</CodeGroup>
+
+### 2. Keep Templates Constant
+
+<CodeGroup>
+
+```csharp Good
+Log.Information("User {UserName} performed {Action}", 
+    userName, action);
+```
+
+```csharp Avoid
+// Don't interpolate into the template
+Log.Information($"User {userName} performed {action}");
+```
+
+</CodeGroup>
+
+<Info>
+Constant templates allow log analysis tools to group events by template, making it easy to identify patterns and trends.
+</Info>
+
+### 3. Choose Appropriate Destructuring
+
+<CodeGroup>
+
+```csharp Scalar Values
+// No destructuring needed for simple types
+Log.Information("Order {OrderId} total is {Total}", 
+    orderId, total);
+```
+
+```csharp Complex Objects
+// Use @ for objects you want to query
+Log.Information("Created order {@Order}", order);
+```
+
+```csharp ToString() Needed
+// Use $ when ToString() is meaningful
+Log.Information("Exception type: {$ExceptionType}", 
+    exception.GetType());
+```
+
+</CodeGroup>
+
+### 4. Match Parameter Order
+
+Ensure parameters match the order of placeholders in the template:
+
+```csharp
+// Correct - parameters match template order
+Log.Information("User {UserName} logged in from {IpAddress}",
+    userName, ipAddress);
+
+// Wrong - parameters in wrong order
+Log.Information("User {UserName} logged in from {IpAddress}",
+    ipAddress, userName);  // ⚠️ Values will be swapped!
+```
+
+## Property Naming Rules
+
+Property names in message templates must follow these rules (enforced by the parser):
+
+- Start with a letter (a-z, A-Z) or underscore (`_`)
+- Contain only letters, digits, underscores, and dots
+- Dots (`.`) indicate nested properties: `{User.Name}`
+- Cannot be empty
+- Positional properties (numeric) are allowed but not recommended
+
+```csharp
+// Valid property names
+Log.Information("{UserName}", name);           // ✓
+Log.Information("{_InternalId}", id);          // ✓  
+Log.Information("{User.Name}", user.Name);     // ✓
+Log.Information("{HTTPStatusCode}", code);     // ✓
+
+// Invalid property names
+Log.Information("{}", value);                  // ✗ Empty
+Log.Information("{123Name}", value);           // ✗ Starts with digit (unless positional)
+Log.Information("{User-Name}", value);         // ✗ Contains hyphen
+```
+
+<Note>
+The message template parser (`MessageTemplateParser`) is cached for performance. Identical templates are only parsed once and reused throughout the application lifecycle.
+</Note>

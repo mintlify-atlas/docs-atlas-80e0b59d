@@ -1,0 +1,132 @@
+---
+title: Introduction to Serilog
+description: A powerful diagnostic logging library for .NET applications with first-class support for structured event data
+---
+
+Serilog is a diagnostic logging library for .NET applications. It is easy to set up, has a clean API, and runs on all recent .NET platforms. While it's useful even in the simplest applications, Serilog's support for structured logging shines when instrumenting complex, distributed, and asynchronous applications and systems.
+
+## Why Serilog?
+
+Unlike traditional logging libraries, Serilog is built from the ground up to record **structured event data**. Instead of formatting events immediately into text, Serilog captures the values associated with each named parameter, opening up rich diagnostic possibilities.
+
+```csharp
+var position = new { Latitude = 25, Longitude = 134 };
+var elapsedMs = 34;
+
+log.Information("Processed {@Position} in {Elapsed} ms", position, elapsedMs);
+```
+
+This creates structured log events that can be searched, analyzed, and queried without parsing or regular expressions:
+
+```json
+{"Position": {"Latitude": 25, "Longitude": 134}, "Elapsed": 34}
+```
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Structured Logging" icon="sitemap">
+    Capture rich, structured event data with message templates. Properties are preserved for powerful querying and analysis.
+  </Card>
+  
+  <Card title="Flexible Configuration" icon="gear">
+    Configure loggers using C# code or external configuration with XML/JSON. Easy to set up and customize for any scenario.
+  </Card>
+  
+  <Card title="Extensive Sink Ecosystem" icon="plug">
+    Write logs to files, console, databases, cloud services, and more. Over 200 community-provided sinks available.
+  </Card>
+  
+  <Card title="Zero-Overhead When Disabled" icon="bolt">
+    Efficient when enabled, extremely low overhead when a logging level is switched off. No performance penalty for disabled logs.
+  </Card>
+  
+  <Card title="Enrichment Support" icon="wand-magic-sparkles">
+    Add contextual information to log events with enrichers. Include thread IDs, machine names, correlation IDs, and custom properties.
+  </Card>
+  
+  <Card title="ASP.NET Core Integration" icon="window">
+    Best-in-class .NET Core support with rich integration for ASP.NET Core applications. Native support for dependency injection.
+  </Card>
+</CardGroup>
+
+## Log Levels
+
+Serilog supports six log levels, from most to least verbose:
+
+- **Verbose** - Anything and everything you might want to know about a running block of code
+- **Debug** - Internal system events that aren't necessarily observable from the outside
+- **Information** - The lifeblood of operational intelligence - things happen
+- **Warning** - Service is degraded or endangered
+- **Error** - Functionality is unavailable, invariants are broken or data is lost
+- **Fatal** - If you have a pager, it goes off when one of these occurs
+
+## Quick Example
+
+Here's a simple example showing Serilog in action:
+
+```csharp
+using Serilog;
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.File("log.txt",
+        rollingInterval: RollingInterval.Day,
+        rollOnFileSizeLimit: true)
+    .CreateLogger();
+
+try
+{
+    const string name = "Serilog";
+    Log.Information("Hello, {Name}!", name);
+    
+    // Your application code here...
+}
+catch (Exception ex)
+{
+    Log.Error(ex, "Unhandled exception");
+}
+finally
+{
+    await Log.CloseAndFlushAsync();
+}
+```
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Serilog via NuGet and add your first sink
+  </Card>
+  
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get up and running with a working logger in minutes
+  </Card>
+</CardGroup>
+
+## Message Templates
+
+Serilog uses [message templates](https://messagetemplates.org), a simple DSL that extends .NET format strings with named parameters:
+
+```csharp
+// Named parameters (preferred)
+log.Information("User {Username} logged in from {IPAddress}", username, ipAddress);
+
+// Destructuring with @ operator - serializes the entire object
+log.Information("Processing {@Order}", order);
+
+// Stringify with $ operator - calls ToString()
+log.Information("Using {$Config}", config);
+```
+
+## Supported Platforms
+
+Serilog runs on:
+
+- .NET 6.0, 8.0, 9.0, and 10.0
+- .NET Framework 4.6.2 and 4.7.1
+- .NET Standard 2.0
+
+<Note>
+  Serilog is community-backed and actively developed with regular updates and new features.
+</Note>

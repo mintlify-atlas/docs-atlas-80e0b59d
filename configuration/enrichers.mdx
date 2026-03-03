@@ -1,0 +1,351 @@
+---
+title: "Configuring Enrichers (Enrich)"
+description: "Add, remove, and modify log event properties using LoggerEnrichmentConfiguration"
+---
+
+The `Enrich` property on `LoggerConfiguration` provides access to `LoggerEnrichmentConfiguration`, which controls how additional properties are added to log events.
+
+## What Are Enrichers?
+
+Enrichers implement `ILogEventEnricher` and can add, remove, or modify properties associated with log events. They execute in the order they are configured.
+
+## Basic Enrichment
+
+### With Method
+
+Add one or more enrichers:
+
+```csharp src/Serilog/Configuration/LoggerEnrichmentConfiguration.cs
+public LoggerConfiguration With(params ILogEventEnricher[] enrichers)
+```
+
+**Example:**
+
+```csharp
+var machineEnricher = new MachineNameEnricher();
+var environmentEnricher = new EnvironmentEnricher();
+
+var logger = new LoggerConfiguration()
+    .Enrich.With(machineEnricher, environmentEnricher)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Generic With Method
+
+Add an enricher by type when it has a parameterless constructor:
+
+```csharp src/Serilog/Configuration/LoggerEnrichmentConfiguration.cs
+public LoggerConfiguration With<TEnricher>()
+    where TEnricher : ILogEventEnricher, new()
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Enrich.With<MachineNameEnricher>()
+    .Enrich.With<ThreadIdEnricher>()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Static Properties
+
+### WithProperty
+
+Include a constant property value in all events:
+
+```csharp src/Serilog/Configuration/LoggerEnrichmentConfiguration.cs
+public LoggerConfiguration WithProperty(
+    string name,
+    object? value,
+    bool destructureObjects = false)
+```
+
+**Examples:**
+
+<CodeGroup>
+```csharp Scalar Value
+var logger = new LoggerConfiguration()
+    .Enrich.WithProperty("Application", "MyApp")
+    .Enrich.WithProperty("Environment", "Production")
+    .Enrich.WithProperty("Version", "1.0.0")
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("Application started");
+// Output includes: Application="MyApp" Environment="Production" Version="1.0.0"
+```
+
+```csharp Complex Object
+var config = new { Timeout = 30, Retries = 3 };
+
+var logger = new LoggerConfiguration()
+    .Enrich.WithProperty("Config", config, destructureObjects: true)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("Using configuration");
+// Output includes: Config={Timeout=30, Retries=3}
+```
+
+```csharp String Representation
+var config = new { Timeout = 30, Retries = 3 };
+
+var logger = new LoggerConfiguration()
+    .Enrich.WithProperty("Config", config, destructureObjects: false)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("Using configuration");
+// Output includes: Config="{ Timeout = 30, Retries = 3 }" (using ToString())
+```
+</CodeGroup>
+
+## Context-Based Enrichment
+
+### FromLogContext
+
+Enrich log events with properties from `LogContext`:
+
+```csharp src/Serilog/Configuration/LoggerEnrichmentConfiguration.cs
+public LoggerConfiguration FromLogContext()
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+
+using (LogContext.PushProperty("RequestId", "12345"))
+using (LogContext.PushProperty("UserId", "user@example.com"))
+{
+    logger.Information("Processing request");
+    // Output includes: RequestId="12345" UserId="user@example.com"
+}
+
+logger.Information("Outside context");
+// RequestId and UserId are not included
+```
+
+<Note>
+`FromLogContext()` is essential for contextual logging in request pipelines, enabling different parts of your code to add properties without passing logger instances around.
+</Note>
+
+## Conditional Enrichment
+
+### When Method
+
+Apply an enricher only when a condition is met:
+
+```csharp src/Serilog/Configuration/LoggerEnrichmentConfiguration.cs
+public LoggerConfiguration When(
+    Func<LogEvent, bool> condition,
+    Action<LoggerEnrichmentConfiguration> configureEnricher)
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Enrich.When(
+        evt => evt.Level >= LogEventLevel.Warning,
+        e => e.WithProperty("RequiresAttention", true))
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("Normal event");
+// RequiresAttention property not added
+
+logger.Warning("Warning event");
+// RequiresAttention=true property added
+```
+
+### AtLevel Method
+
+Apply an enricher only to events at or above a specific level:
+
+```csharp src/Serilog/Configuration/LoggerEnrichmentConfiguration.cs
+public LoggerConfiguration AtLevel(
+    LogEventLevel enrichFromLevel,
+    Action<LoggerEnrichmentConfiguration> configureEnricher)
+```
+
+**Example:**
+
+```csharp
+var expensiveEnricher = new StackTraceEnricher();
+
+var logger = new LoggerConfiguration()
+    .Enrich.AtLevel(LogEventLevel.Error, e => e.With(expensiveEnricher))
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("Info event");  // No stack trace
+logger.Error("Error event");      // Includes stack trace
+```
+
+<Note>
+Use `AtLevel` to attach expensive enrichment (like stack traces, environment details) only to important events.
+</Note>
+
+### Dynamic AtLevel with Level Switch
+
+```csharp src/Serilog/Configuration/LoggerEnrichmentConfiguration.cs
+public LoggerConfiguration AtLevel(
+    LoggingLevelSwitch levelSwitch,
+    Action<LoggerEnrichmentConfiguration> configureEnricher)
+```
+
+**Example:**
+
+```csharp
+var enrichmentSwitch = new LoggingLevelSwitch(LogEventLevel.Error);
+
+var logger = new LoggerConfiguration()
+    .Enrich.AtLevel(enrichmentSwitch, e => e
+        .WithProperty("DetailedContext", true)
+        .With<StackTraceEnricher>())
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Warning("Warning");  // No enrichment
+logger.Error("Error");      // Enriched
+
+// Enable enrichment for warnings too
+enrichmentSwitch.MinimumLevel = LogEventLevel.Warning;
+
+logger.Warning("Warning");  // Now enriched
+```
+
+## Enrichment Order
+
+Enrichers execute in the order they are configured:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Enrich.WithProperty("Step", "1")
+    .Enrich.With<SecondEnricher>()  // Can see "Step" property
+    .Enrich.With<ThirdEnricher>()   // Can see properties from previous enrichers
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+From the test suite:
+
+```csharp test/Serilog.Tests/Configuration/LoggerConfigurationTests.cs:240-254
+var property = Some.LogEventProperty();
+var enrichedPropertySeen = false;
+
+var logger = new LoggerConfiguration()
+    .WriteTo.Sink(new StringSink())
+    .Enrich.With(new DelegatingEnricher((e, _) => 
+        e.AddPropertyIfAbsent(property)))
+    .Enrich.With(new DelegatingEnricher((e, _) => 
+        enrichedPropertySeen = e.Properties.ContainsKey(property.Name)))
+    .CreateLogger();
+
+logger.Write(Some.InformationEvent());
+// enrichedPropertySeen is true - second enricher sees first enricher's property
+```
+
+## Wrapping Enrichers
+
+Create wrapper enrichers for advanced scenarios:
+
+```csharp src/Serilog/Configuration/LoggerEnrichmentConfiguration.cs
+public static LoggerConfiguration Wrap(
+    LoggerEnrichmentConfiguration loggerEnrichmentConfiguration,
+    Func<ILogEventEnricher, ILogEventEnricher> wrapEnricher,
+    Action<LoggerEnrichmentConfiguration> configureWrappedEnricher)
+```
+
+**Example:**
+
+```csharp
+var enricher = new MyEnricher();
+
+var configuration = new LoggerConfiguration();
+LoggerEnrichmentConfiguration.Wrap(
+    configuration.Enrich,
+    e => new ConditionalEnricher(e, le => le.Level == LogEventLevel.Warning),
+    enrich => enrich.With(enricher));
+
+var logger = configuration.CreateLogger();
+```
+
+<Warning>
+Wrapping enrichers should implement `IDisposable` to ensure wrapped enrichers are properly disposed.
+</Warning>
+
+## Creating Custom Enrichers
+
+Implement the `ILogEventEnricher` interface:
+
+```csharp
+public class CustomEnricher : ILogEventEnricher
+{
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var property = propertyFactory.CreateProperty("CustomProperty", "CustomValue");
+        logEvent.AddPropertyIfAbsent(property);
+    }
+}
+
+var logger = new LoggerConfiguration()
+    .Enrich.With<CustomEnricher>()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Complete Example
+
+Combining multiple enrichment strategies:
+
+```csharp
+var enrichmentSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
+
+var logger = new LoggerConfiguration()
+    // Static properties
+    .Enrich.WithProperty("Application", "MyApp")
+    .Enrich.WithProperty("Version", Assembly.GetExecutingAssembly().GetName().Version)
+    
+    // Context-based
+    .Enrich.FromLogContext()
+    
+    // Standard enrichers
+    .Enrich.WithMachineName()
+    .Enrich.WithThreadId()
+    
+    // Conditional enrichment
+    .Enrich.When(
+        evt => evt.Exception != null,
+        e => e.WithProperty("HasException", true))
+    
+    // Level-based expensive enrichment
+    .Enrich.AtLevel(enrichmentSwitch, e => e
+        .With<StackTraceEnricher>()
+        .With<EnvironmentDetailsEnricher>())
+    
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Exception Handling
+
+Enrichment failures are not considered blocking and do not propagate exceptions:
+
+```csharp test/Serilog.Tests/Configuration/LoggerConfigurationTests.cs
+// Even if an enricher throws, logging continues
+var logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .Enrich.With(new ThrowingEnricher())
+    .CreateLogger();
+
+logger.Information("This still logs");
+// No exception reaches the caller
+```

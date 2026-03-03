@@ -1,0 +1,176 @@
+---
+title: Installation
+description: Install Serilog and configure your first logger in a .NET application
+---
+
+Serilog is distributed as a NuGet package. You'll need the core Serilog package plus at least one sink package to output your logs.
+
+## Core Package
+
+The `Serilog` package contains the core logging functionality:
+
+<CodeGroup>
+```bash .NET CLI
+dotnet add package Serilog
+```
+
+```bash Package Manager Console
+Install-Package Serilog
+```
+
+```xml PackageReference
+<PackageReference Include="Serilog" Version="4.2.0" />
+```
+</CodeGroup>
+
+## Installing Sinks
+
+Serilog requires at least one sink to output log events. Here are the most commonly used sinks:
+
+### Console Sink
+
+Write log events to the console with color-coded output:
+
+<CodeGroup>
+```bash .NET CLI
+dotnet add package Serilog.Sinks.Console
+```
+
+```bash Package Manager Console
+Install-Package Serilog.Sinks.Console
+```
+
+```xml PackageReference
+<PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+```
+</CodeGroup>
+
+### File Sink
+
+Write log events to text files with optional rolling:
+
+<CodeGroup>
+```bash .NET CLI
+dotnet add package Serilog.Sinks.File
+```
+
+```bash Package Manager Console
+Install-Package Serilog.Sinks.File
+```
+
+```xml PackageReference
+<PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+```
+</CodeGroup>
+
+### Other Popular Sinks
+
+<CodeGroup>
+```bash Seq
+dotnet add package Serilog.Sinks.Seq
+```
+
+```bash Elasticsearch
+dotnet add package Serilog.Sinks.Elasticsearch
+```
+
+```bash Application Insights
+dotnet add package Serilog.Sinks.ApplicationInsights
+```
+
+```bash SQL Server
+dotnet add package Serilog.Sinks.MSSqlServer
+```
+</CodeGroup>
+
+<Note>
+  Over 200 sinks are available for various destinations including databases, cloud services, message queues, and monitoring platforms. Browse the full list at [serilog.net](https://github.com/serilog/serilog/wiki/Provided-Sinks).
+</Note>
+
+## Quick Install for Common Scenarios
+
+### Console Application
+
+For a basic console application with console and file output:
+
+```bash
+dotnet add package Serilog
+dotnet add package Serilog.Sinks.Console
+dotnet add package Serilog.Sinks.File
+```
+
+### ASP.NET Core Application
+
+For ASP.NET Core applications with enhanced integration:
+
+```bash
+dotnet add package Serilog
+dotnet add package Serilog.AspNetCore
+dotnet add package Serilog.Sinks.Console
+dotnet add package Serilog.Sinks.File
+```
+
+### Cloud-Native Application
+
+For applications running in containerized or cloud environments:
+
+```bash
+dotnet add package Serilog
+dotnet add package Serilog.Sinks.Console
+dotnet add package Serilog.Formatting.Compact
+dotnet add package Serilog.Enrichers.Environment
+```
+
+## Verifying Installation
+
+After installing the packages, verify your installation by creating a simple logger:
+
+```csharp
+using Serilog;
+
+// Create a simple logger
+var log = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+log.Information("Serilog is installed and working!");
+log.Dispose();
+```
+
+Run your application, and you should see the log message in your console output.
+
+## Package Compatibility
+
+Serilog packages target multiple frameworks for broad compatibility:
+
+| Package | .NET 6+ | .NET Standard 2.0 | .NET Framework 4.6.2+ |
+|---------|---------|-------------------|----------------------|
+| Serilog | ✓ | ✓ | ✓ |
+| Serilog.Sinks.Console | ✓ | ✓ | ✓ |
+| Serilog.Sinks.File | ✓ | ✓ | ✓ |
+
+<Note>
+  Serilog 4.x+ is AOT (Ahead-of-Time) compatible for .NET 7.0 and later, making it suitable for use with Native AOT compilation.
+</Note>
+
+## Configuration Packages (Optional)
+
+If you prefer configuration-based setup over code-based configuration:
+
+<CodeGroup>
+```bash JSON Configuration
+dotnet add package Serilog.Settings.Configuration
+```
+
+```bash XML Configuration
+dotnet add package Serilog.Settings.AppSettings
+```
+</CodeGroup>
+
+## Next Steps
+
+Now that Serilog is installed, learn how to configure and use it:
+
+<Card title="Quick Start" icon="rocket" href="/quickstart">
+  Configure your first logger and start logging in minutes
+</Card>

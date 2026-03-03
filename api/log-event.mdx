@@ -1,0 +1,263 @@
+---
+title: LogEvent
+description: Represents a log event with timestamp, level, message template, properties, and optional exception
+---
+
+## Overview
+
+The `LogEvent` class represents a single log event in Serilog. It encapsulates all information about a logging occurrence, including the timestamp, severity level, message template, properties, exception details, and distributed tracing identifiers.
+
+## Constructors
+
+### LogEvent(DateTimeOffset, LogEventLevel, Exception, MessageTemplate, IEnumerable\<LogEventProperty\>)
+
+Construct a new log event.
+
+<ParamField path="timestamp" type="DateTimeOffset" required>
+  The time at which the event occurred.
+</ParamField>
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="exception" type="Exception">
+  An exception associated with the event, or null.
+</ParamField>
+
+<ParamField path="messageTemplate" type="MessageTemplate" required>
+  The message template describing the event.
+</ParamField>
+
+<ParamField path="properties" type="IEnumerable<LogEventProperty>" required>
+  Properties associated with the event, including those presented in the message template.
+</ParamField>
+
+**Exceptions:**
+- `ArgumentNullException` - When `messageTemplate` or `properties` is null
+
+### LogEvent(DateTimeOffset, LogEventLevel, Exception, MessageTemplate, IEnumerable\<LogEventProperty\>, ActivityTraceId, ActivitySpanId)
+
+Construct a new log event with distributed tracing identifiers.
+
+<ParamField path="timestamp" type="DateTimeOffset" required>
+  The time at which the event occurred.
+</ParamField>
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="exception" type="Exception">
+  An exception associated with the event, or null.
+</ParamField>
+
+<ParamField path="messageTemplate" type="MessageTemplate" required>
+  The message template describing the event.
+</ParamField>
+
+<ParamField path="properties" type="IEnumerable<LogEventProperty>" required>
+  Properties associated with the event, including those presented in the message template.
+</ParamField>
+
+<ParamField path="traceId" type="ActivityTraceId" required>
+  The id of the trace that was active when the event was created, if any.
+</ParamField>
+
+<ParamField path="spanId" type="ActivitySpanId" required>
+  The id of the span that was active when the event was created, if any.
+</ParamField>
+
+**Exceptions:**
+- `ArgumentNullException` - When `messageTemplate` or `properties` is null
+
+## Properties
+
+<ResponseField name="Timestamp" type="DateTimeOffset">
+  The time at which the event occurred.
+</ResponseField>
+
+<ResponseField name="Level" type="LogEventLevel">
+  The level of the event.
+</ResponseField>
+
+<ResponseField name="TraceId" type="ActivityTraceId?">
+  The id of the trace that was active when the event was created, if any. Returns null if no trace was active.
+</ResponseField>
+
+<ResponseField name="SpanId" type="ActivitySpanId?">
+  The id of the span that was active when the event was created, if any. Returns null if no span was active.
+</ResponseField>
+
+<ResponseField name="MessageTemplate" type="MessageTemplate">
+  The message template describing the event.
+</ResponseField>
+
+<ResponseField name="Properties" type="IReadOnlyDictionary<string, LogEventPropertyValue>">
+  Properties associated with the event, including those presented in the message template.
+</ResponseField>
+
+<ResponseField name="Exception" type="Exception">
+  An exception associated with the event, or null.
+</ResponseField>
+
+## Methods
+
+### RenderMessage(TextWriter, IFormatProvider)
+
+Render the message template to the specified output, given the properties associated with the event.
+
+<ParamField path="output" type="TextWriter" required>
+  The output writer to render the message to.
+</ParamField>
+
+<ParamField path="formatProvider" type="IFormatProvider">
+  Supplies culture-specific formatting information, or null.
+</ParamField>
+
+```csharp
+var writer = new StringWriter();
+logEvent.RenderMessage(writer);
+string message = writer.ToString();
+```
+
+### RenderMessage(IFormatProvider)
+
+Render the message template given the properties associated with the event, and return the result.
+
+<ParamField path="formatProvider" type="IFormatProvider">
+  Supplies culture-specific formatting information, or null.
+</ParamField>
+
+**Returns:** `string` - The rendered message
+
+```csharp
+string message = logEvent.RenderMessage();
+```
+
+### AddOrUpdateProperty(LogEventProperty)
+
+Add a property to the event if not already present, otherwise, update its value.
+
+<ParamField path="property" type="LogEventProperty" required>
+  The property to add or update.
+</ParamField>
+
+**Exceptions:**
+- `ArgumentNullException` - When `property` is null
+
+```csharp
+var property = new LogEventProperty("UserId", new ScalarValue(123));
+logEvent.AddOrUpdateProperty(property);
+```
+
+### AddPropertyIfAbsent(LogEventProperty)
+
+Add a property to the event if not already present.
+
+<ParamField path="property" type="LogEventProperty" required>
+  The property to add.
+</ParamField>
+
+**Exceptions:**
+- `ArgumentNullException` - When `property` is null
+
+```csharp
+var property = new LogEventProperty("RequestId", new ScalarValue("abc123"));
+logEvent.AddPropertyIfAbsent(property);
+```
+
+### AddPropertyIfAbsent(ILogEventPropertyFactory, string, object, bool)
+
+Add a property to the event if not already present using a factory.
+
+<ParamField path="factory" type="ILogEventPropertyFactory" required>
+  Factory for creating the property to add to the event.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  The name of the property.
+</ParamField>
+
+<ParamField path="value" type="object">
+  The value of the property.
+</ParamField>
+
+<ParamField path="destructureObjects" type="bool" default="false">
+  If true, and the value is a non-primitive, non-array type, then the value will be converted to a structure; otherwise, unknown types will be converted to scalars.
+</ParamField>
+
+**Exceptions:**
+- `ArgumentNullException` - When `factory` is null
+
+```csharp
+logEvent.AddPropertyIfAbsent(logger, "Context", contextObject, destructureObjects: true);
+```
+
+### RemovePropertyIfPresent(string)
+
+Remove a property from the event, if present. Otherwise no action is performed.
+
+<ParamField path="propertyName" type="string" required>
+  The name of the property to remove.
+</ParamField>
+
+```csharp
+logEvent.RemovePropertyIfPresent("SensitiveData");
+```
+
+## Static Methods
+
+### UnstableAssembleFromParts
+
+Construct a `LogEvent` using pre-allocated values for internal fields. This method allows specialized callers to avoid dictionary allocation overhead.
+
+<ParamField path="timestamp" type="DateTimeOffset" required>
+  The time at which the event occurred.
+</ParamField>
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="exception" type="Exception">
+  An exception associated with the event, or null.
+</ParamField>
+
+<ParamField path="messageTemplate" type="MessageTemplate" required>
+  The message template describing the event.
+</ParamField>
+
+<ParamField path="properties" type="Dictionary<string, LogEventPropertyValue>" required>
+  Properties associated with the event, including those presented in the message template.
+</ParamField>
+
+<ParamField path="traceId" type="ActivityTraceId" required>
+  The id of the trace that was active when the event was created, if any.
+</ParamField>
+
+<ParamField path="spanId" type="ActivitySpanId" required>
+  The id of the span that was active when the event was created, if any.
+</ParamField>
+
+**Returns:** `LogEvent` - A constructed log event
+
+**Exceptions:**
+- `ArgumentNullException` - When `messageTemplate` or `properties` is null
+
+<Warning>
+  Because this method exposes parameters that map 1:1 with internal fields of `LogEvent`, the parameter list may change across major Serilog versions.
+</Warning>
+
+```csharp
+var properties = new Dictionary<string, LogEventPropertyValue>();
+var logEvent = LogEvent.UnstableAssembleFromParts(
+    DateTimeOffset.Now,
+    LogEventLevel.Information,
+    null,
+    messageTemplate,
+    properties,
+    default,
+    default
+);
+```

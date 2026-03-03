@@ -1,0 +1,392 @@
+---
+title: "LogContext Guide"
+description: "Using LogContext for contextual logging with ambient properties"
+---
+
+LogContext allows you to dynamically enrich log events with ambient properties that flow through your code execution, including across asynchronous boundaries.
+
+## Overview
+
+LogContext maintains a stack of enrichers using `AsyncLocal<T>`, which means properties are preserved across async/await calls and remain isolated to the current logical execution context.
+
+## Configuration
+
+Enable LogContext enrichment in your logger configuration:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+<Warning>
+LogContext enrichment is **not enabled by default**. You must call `.Enrich.FromLogContext()` or properties will not be attached to log events.
+</Warning>
+
+## Basic Usage
+
+### Pushing Properties
+
+Use `PushProperty()` to add a property to the current context:
+
+```csharp
+using (LogContext.PushProperty("UserId", userId))
+{
+    Log.Information("User logged in");
+    // Output includes: UserId=123
+    
+    ProcessUserData();
+    // All logs in this scope include UserId
+}
+
+// Outside the using block, UserId is no longer attached
+Log.Information("Processing complete");
+```
+
+<Note>
+LogContext uses `IDisposable` to ensure properties are properly removed when the scope exits. Always use `using` statements or manually dispose the returned handle.
+</Note>
+
+### Destructuring Objects
+
+Serialize complex objects with the `destructureObjects` parameter:
+
+```csharp
+var order = new Order { Id = 123, Amount = 99.99m };
+
+using (LogContext.PushProperty("Order", order, destructureObjects: true))
+{
+    Log.Information("Processing order");
+    // Output includes: Order={Id=123, Amount=99.99}
+}
+```
+
+<CodeGroup>
+
+```csharp With destructuring (true)
+using (LogContext.PushProperty("User", user, destructureObjects: true))
+{
+    // User is serialized as a structure
+    // {User={Name="Alice", Email="alice@example.com"}}
+}
+```
+
+```csharp Without destructuring (false)
+using (LogContext.PushProperty("User", user, destructureObjects: false))
+{
+    // User is converted via ToString()
+    // {User="MyApp.User"}
+}
+```
+
+</CodeGroup>
+
+## Advanced Features
+
+### Multiple Properties
+
+Push multiple properties at once:
+
+```csharp
+using (LogContext.Push(
+    new PropertyEnricher("RequestId", requestId),
+    new PropertyEnricher("CorrelationId", correlationId),
+    new PropertyEnricher("TenantId", tenantId)))
+{
+    Log.Information("Processing request");
+    // All three properties are attached
+}
+```
+
+### Custom Enrichers
+
+Push custom `ILogEventEnricher` implementations:
+
+```csharp
+public class TimingEnricher : ILogEventEnricher
+{
+    readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory factory)
+    {
+        var elapsed = factory.CreateProperty("ElapsedMs", _stopwatch.ElapsedMilliseconds);
+        logEvent.AddPropertyIfAbsent(elapsed);
+    }
+}
+
+using (LogContext.Push(new TimingEnricher()))
+{
+    PerformOperation();
+    Log.Information("Operation completed");
+    // Output includes: ElapsedMs=1234
+}
+```
+
+### Nested Contexts
+
+LogContext properties stack - inner properties override outer ones:
+
+```csharp
+using (LogContext.PushProperty("Environment", "Production"))
+{
+    Log.Information("Outer context");
+    // Environment=Production
+
+    using (LogContext.PushProperty("Environment", "Staging"))
+    {
+        Log.Information("Inner context");
+        // Environment=Staging (overrides outer)
+    }
+
+    Log.Information("Back to outer context");
+    // Environment=Production (restored)
+}
+```
+
+<Tip>
+Use nested contexts to temporarily override properties for specific operations, then automatically restore the previous value.
+</Tip>
+
+## Working with Async Code
+
+LogContext automatically flows across async/await boundaries:
+
+```csharp
+using (LogContext.PushProperty("RequestId", requestId))
+{
+    await ProcessRequestAsync();
+    // RequestId flows through the async call
+}
+
+async Task ProcessRequestAsync()
+{
+    Log.Information("Starting");
+    // RequestId is available here
+    
+    await Task.Delay(100);
+    // Even after continuation on a different thread
+    
+    Log.Information("Completed");
+    // RequestId still available
+}
+```
+
+<Note>
+LogContext uses `AsyncLocal<T>`, which means properties flow through async execution contexts but remain isolated between parallel operations.
+</Note>
+
+## Cloning Context
+
+Clone the current context to use in a different location or thread:
+
+```csharp
+ILogEventEnricher clonedContext;
+
+using (LogContext.PushProperty("ParentTask", "Main"))
+{
+    clonedContext = LogContext.Clone();
+}
+
+// Later, in a different thread or scope:
+Task.Run(() =>
+{
+    using (LogContext.Push(clonedContext))
+    {
+        Log.Information("Background work");
+        // ParentTask=Main is available here
+    }
+});
+```
+
+<Tip>
+Cloning is useful for background tasks, message queue handlers, or any scenario where you want to preserve context across execution boundaries.
+</Tip>
+
+## Suspending and Resetting
+
+### Suspend
+
+Temporarily remove all enrichers, then restore them:
+
+```csharp
+using (LogContext.PushProperty("UserId", 123))
+{
+    Log.Information("Before suspend");
+    // UserId=123
+
+    using (LogContext.Suspend())
+    {
+        Log.Information("During suspend");
+        // No UserId property
+    }
+
+    Log.Information("After suspend");
+    // UserId=123 (restored)
+}
+```
+
+### Reset
+
+Permanently clear all properties in the current async scope:
+
+```csharp
+using (LogContext.PushProperty("Temporary", "Value"))
+{
+    await Task.Run(() =>
+    {
+        LogContext.Reset();
+        Log.Information("After reset");
+        // No Temporary property
+    });
+
+    // Outside the Task.Run, properties are still available
+    Log.Information("In parent context");
+    // Temporary=Value
+}
+```
+
+<Warning>
+`Reset()` only affects the current async scope. Parent scopes retain their properties.
+</Warning>
+
+## Common Patterns
+
+### Web Request Correlation
+
+```csharp
+public async Task<IActionResult> HandleRequest()
+{
+    using (LogContext.PushProperty("RequestId", HttpContext.TraceIdentifier))
+    using (LogContext.PushProperty("UserId", User.Identity.Name))
+    {
+        Log.Information("Handling request");
+        
+        var result = await ProcessRequestAsync();
+        
+        Log.Information("Request completed");
+        return result;
+    }
+}
+```
+
+### Multi-tenancy
+
+```csharp
+public class TenantContextMiddleware
+{
+    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    {
+        var tenantId = ExtractTenantId(context);
+        
+        using (LogContext.PushProperty("TenantId", tenantId))
+        {
+            await next(context);
+        }
+    }
+}
+```
+
+### Operation Timing
+
+```csharp
+public async Task<T> MeasureAsync<T>(string operation, Func<Task<T>> func)
+{
+    var sw = Stopwatch.StartNew();
+    
+    using (LogContext.PushProperty("Operation", operation))
+    {
+        try
+        {
+            var result = await func();
+            Log.Information("Completed in {Elapsed}ms", sw.ElapsedMilliseconds);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed after {Elapsed}ms", sw.ElapsedMilliseconds);
+            throw;
+        }
+    }
+}
+```
+
+### Distributed Tracing
+
+```csharp
+using (LogContext.PushProperty("TraceId", Activity.Current?.TraceId))
+using (LogContext.PushProperty("SpanId", Activity.Current?.SpanId))
+{
+    Log.Information("Distributed operation");
+    // Includes OpenTelemetry trace identifiers
+}
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Always use 'using' statements">
+Ensure properties are properly removed by wrapping `PushProperty()` in a `using` block.
+</Step>
+
+<Step title="Push properties early in the request pipeline">
+For web applications, add contextual properties in middleware so they're available for the entire request.
+</Step>
+
+<Step title="Be selective with destructuring">
+Only destructure objects when you need their full structure logged. For identifiers, use scalar values.
+</Step>
+
+<Step title="Avoid pushing too many properties">
+Each property adds overhead. Focus on properties that add diagnostic value.
+</Step>
+
+<Step title="Clone context for background work">
+When starting background tasks, clone the current context to preserve request correlation.
+</Step>
+
+</Steps>
+
+## Performance Considerations
+
+- LogContext uses `AsyncLocal<T>` which has minimal overhead for reads
+- Property stacks are immutable, so pushing/popping is efficient
+- Destructuring complex objects adds serialization cost
+- Each enricher in the stack is called for every log event
+
+<Tip>
+In high-performance scenarios, profile your enrichers and consider using conditional enrichment based on log level.
+</Tip>
+
+## Troubleshooting
+
+### Properties not appearing
+
+```csharp
+// ❌ Forgot to enable LogContext
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+// ✅ Correctly enabled
+Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Properties not flowing across async
+
+```csharp
+// ❌ Not awaited - loses context
+Task.Run(() => Log.Information("Background"));
+
+// ✅ Clone context for background work
+var context = LogContext.Clone();
+Task.Run(() =>
+{
+    using (LogContext.Push(context))
+        Log.Information("Background");
+});
+```

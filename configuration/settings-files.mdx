@@ -1,0 +1,360 @@
+---
+title: "Configuration from Settings Files"
+description: "Load Serilog configuration from external settings using LoggerSettingsConfiguration"
+---
+
+The `ReadFrom` property on `LoggerConfiguration` enables loading configuration from external sources like configuration files, avoiding hard-coded settings.
+
+## ReadFrom API
+
+The `LoggerSettingsConfiguration` class provides methods to apply external settings:
+
+```csharp src/Serilog/Configuration/LoggerSettingsConfiguration.cs
+public LoggerConfiguration Settings(ILoggerSettings settings)
+public LoggerConfiguration KeyValuePairs(IEnumerable<KeyValuePair<string, string>> settings)
+```
+
+## Using ILoggerSettings
+
+Implement `ILoggerSettings` for custom configuration sources:
+
+```csharp src/Serilog/Configuration/LoggerSettingsConfiguration.cs
+public LoggerConfiguration Settings(ILoggerSettings settings)
+```
+
+**Example:**
+
+```csharp
+public class MyCustomSettings : ILoggerSettings
+{
+    public void Configure(LoggerConfiguration loggerConfiguration)
+    {        loggerConfiguration
+            .MinimumLevel.Information()
+            .WriteTo.Console();
+    }
+}
+
+var logger = new LoggerConfiguration()
+    .ReadFrom.Settings(new MyCustomSettings())
+    .CreateLogger();
+```
+
+## Key-Value Pair Configuration
+
+Load configuration from key-value pairs using the Serilog settings format:
+
+```csharp src/Serilog/Configuration/LoggerSettingsConfiguration.cs
+public LoggerConfiguration KeyValuePairs(
+    IEnumerable<KeyValuePair<string, string>> settings)
+```
+
+<Warning>
+This method requires:
+- `[RequiresUnreferencedCode]` - Scans assemblies at runtime, not compatible with trimming
+- `[RequiresDynamicCode]` - May create arrays, not compatible with AOT
+</Warning>
+
+### Supported Directives
+
+From the source code:
+
+```csharp src/Serilog/Settings/KeyValuePairs/KeyValuePairSettings.cs:40-52
+static readonly string[] _supportedDirectives =
+[
+    "using",
+    "level-switch",
+    "audit-to",
+    "write-to",
+    "minimum-level",
+    "minimum-level:controlled-by",
+    "enrich:with-property",
+    "enrich",
+    "filter",
+    "destructure"
+];
+```
+
+## Configuration Format
+
+### Basic Settings
+
+<CodeGroup>
+```json Minimum Level
+{
+  "minimum-level": "Debug"
+}
+```
+
+```json Level Switch
+{
+  "level-switch:$appSwitch": "Information",
+  "minimum-level:controlled-by": "$appSwitch"
+}
+```
+
+```json Level Overrides
+{
+  "minimum-level": "Information",
+  "minimum-level:override:Microsoft": "Warning",
+  "minimum-level:override:System": "Warning"
+}
+```
+</CodeGroup>
+
+### Enrichment
+
+<CodeGroup>
+```json Static Properties
+{
+  "enrich:with-property:Application": "MyApp",
+  "enrich:with-property:Environment": "Production"
+}
+```
+
+```json Enrichers
+{
+  "using": "Serilog.Enrichers.Environment",
+  "enrich": "FromLogContext",
+  "enrich:WithMachineName": "",
+  "enrich:WithThreadId": ""
+}
+```
+</CodeGroup>
+
+### Sinks
+
+```json
+{
+  "using": "Serilog.Sinks.Console",
+  "write-to:Console": ""
+}
+```
+
+### Sink with Arguments
+
+```json
+{
+  "using": "Serilog.Sinks.File",
+  "write-to:File.path": "logs/myapp.txt",
+  "write-to:File.rollingInterval": "Day",
+  "write-to:File.restrictedToMinimumLevel": "Information"
+}
+```
+
+## Using Assemblies
+
+Load extension methods from additional assemblies:
+
+```csharp src/Serilog/Settings/KeyValuePairs/KeyValuePairSettings.cs:268-283
+{
+  "using:Console": "Serilog.Sinks.Console",
+  "using:File": "Serilog.Sinks.File",
+  "write-to:Console": "",
+  "write-to:File.path": "log.txt"
+}
+```
+
+<Note>
+The `using` directive loads assemblies so their extension methods (like `WriteTo.Console()`) can be called via configuration.
+</Note>
+
+## Level Switches
+
+Declare and reference level switches:
+
+### Declaration
+
+```csharp src/Serilog/Settings/KeyValuePairs/KeyValuePairSettings.cs:38
+{
+  "level-switch:$consoleSwitch": "Information",
+  "level-switch:$fileSwitch": "Debug"
+}
+```
+
+Level switch names must:
+- Start with `$`
+- Follow pattern: `$[A-Za-z]+[A-Za-z0-9]*`
+
+### Using Switches
+
+<CodeGroup>
+```json Global Level
+{
+  "level-switch:$appSwitch": "Information",
+  "minimum-level:controlled-by": "$appSwitch"
+}
+```
+
+```json Override Level
+{
+  "level-switch:$msSwitch": "Warning",
+  "minimum-level": "Debug",
+  "minimum-level:override:Microsoft": "$msSwitch"
+}
+```
+
+```json Sink Level
+{
+  "level-switch:$consoleSwitch": "Information",
+  "write-to:Console.levelSwitch": "$consoleSwitch"
+}
+```
+</CodeGroup>
+
+## Complete Example
+
+### Settings Dictionary
+
+```csharp
+var settings = new Dictionary<string, string>
+{
+    // Load assemblies
+    ["using:Console"] = "Serilog.Sinks.Console",
+    ["using:File"] = "Serilog.Sinks.File",
+    
+    // Declare level switches
+    ["level-switch:$consoleSwitch"] = "Information",
+    ["level-switch:$fileSwitch"] = "Debug",
+    
+    // Minimum level
+    ["minimum-level:controlled-by"] = "$fileSwitch",
+    ["minimum-level:override:Microsoft"] = "Warning",
+    ["minimum-level:override:System"] = "Warning",
+    
+    // Enrichment
+    ["enrich:with-property:Application"] = "MyApp",
+    ["enrich:with-property:Version"] = "1.0.0",
+    ["enrich"] = "FromLogContext",
+    
+    // Sinks
+    ["write-to:Console.levelSwitch"] = "$consoleSwitch",
+    ["write-to:File.path"] = "logs/myapp.txt",
+    ["write-to:File.levelSwitch"] = "$fileSwitch",
+    ["write-to:File.rollingInterval"] = "Day"
+};
+
+var logger = new LoggerConfiguration()
+    .ReadFrom.KeyValuePairs(settings)
+    .CreateLogger();
+```
+
+## Integration with appsettings.json
+
+While `KeyValuePairs` can work with any configuration source, most .NET applications use dedicated packages:
+
+<Note>
+**Recommended:** Use `Serilog.Settings.Configuration` package for `appsettings.json` integration:
+
+```csharp
+var configuration = new ConfigurationBuilder()
+    .AddJsonFile("appsettings.json")
+    .Build();
+
+var logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(configuration)
+    .CreateLogger();
+```
+
+This provides better integration with Microsoft.Extensions.Configuration.
+</Note>
+
+### Manual Key-Value Approach
+
+If you need to manually extract settings:
+
+```csharp
+var configuration = new ConfigurationBuilder()
+    .AddJsonFile("appsettings.json")
+    .Build();
+
+var serilogSettings = configuration
+    .GetSection("Serilog")
+    .AsEnumerable()
+    .Where(kvp => kvp.Value != null)
+    .ToDictionary(kvp => kvp.Key.Replace("Serilog:", ""), kvp => kvp.Value!);
+
+var logger = new LoggerConfiguration()
+    .ReadFrom.KeyValuePairs(serilogSettings)
+    .CreateLogger();
+```
+
+## Configuration Method Matching
+
+The settings system matches configuration keys to extension methods:
+
+```csharp src/Serilog/Settings/KeyValuePairs/KeyValuePairSettings.cs:36
+// Pattern: directive:method.argument
+const string CallableDirectiveRegex = 
+    @"^(?<directive>audit-to|write-to|enrich|filter|destructure):(?<method>[A-Za-z0-9]*)(\.(?<argument>[A-Za-z0-9]*))?$";
+```
+
+### Examples
+
+| Configuration Key | Calls | Argument |
+|------------------|-------|----------|
+| `write-to:Console` | `WriteTo.Console()` | - |
+| `write-to:File.path` | `WriteTo.File()` | `path` parameter |
+| `enrich:WithProperty.name` | `Enrich.WithProperty()` | `name` parameter |
+| `filter:ByExcluding.expression` | `Filter.ByExcluding()` | `expression` parameter |
+
+## Duplicate Keys
+
+When duplicate keys exist, the last value wins:
+
+```csharp src/Serilog/Settings/KeyValuePairs/KeyValuePairSettings.cs:51-61
+var settings = new[]
+{
+    new KeyValuePair<string, string>("minimum-level", "Debug"),
+    new KeyValuePair<string, string>("minimum-level", "Information")
+};
+
+var logger = new LoggerConfiguration()
+    .ReadFrom.KeyValuePairs(settings)
+    .CreateLogger();
+// Minimum level is Information (last value)
+```
+
+## Error Handling
+
+### Invalid Switch Name
+
+```csharp src/Serilog/Settings/KeyValuePairs/KeyValuePairSettings.cs:184-187
+{
+  "level-switch:invalid-name": "Information"  // Missing $
+}
+// Throws: FormatException - "invalid-name" is not a valid name for a Level Switch
+```
+
+### Missing Switch Declaration
+
+```csharp src/Serilog/Settings/KeyValuePairs/KeyValuePairSettings.cs:204-212
+{
+  "minimum-level:controlled-by": "$undeclaredSwitch"
+}
+// Throws: InvalidOperationException - No LoggingLevelSwitch has been declared
+```
+
+### Unknown Method
+
+```csharp src/Serilog/Settings/KeyValuePairs/KeyValuePairSettings.cs:234-237
+{
+  "write-to:UnknownSink": ""
+}
+// Logged to SelfLog - setting could not be matched to an implementation
+```
+
+## Combining with Code Configuration
+
+You can mix settings-based and code-based configuration:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .ReadFrom.KeyValuePairs(settings)  // Load from settings
+    .MinimumLevel.Override("MyNamespace", LogEventLevel.Debug)  // Add code config
+    .WriteTo.CustomSink()  // Add additional sink
+    .CreateLogger();
+```
+
+<Note>
+Code configuration applied after `ReadFrom` can override or augment settings-based configuration.
+</Note>

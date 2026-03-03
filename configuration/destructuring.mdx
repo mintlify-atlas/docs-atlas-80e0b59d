@@ -1,0 +1,404 @@
+---
+title: "Destructuring Configuration"
+description: "Configure how complex objects are captured in log events using LoggerDestructuringConfiguration"
+---
+
+The `Destructure` property on `LoggerConfiguration` controls how complex objects are broken down into properties when logging.
+
+## What Is Destructuring?
+
+When you use the destructuring operator `@` in message templates, Serilog captures objects as structured data:
+
+```csharp
+var order = new Order { Id = 123, Total = 99.99m, Status = "Pending" };
+
+logger.Information("Processing {@Order}", order);
+// Order is captured as: { Id: 123, Total: 99.99, Status: "Pending" }
+```
+
+The `Destructure` configuration controls this behavior.
+
+## Scalar Types
+
+Treat types as scalar values (don't break them down into properties):
+
+### AsScalar Method
+
+```csharp src/Serilog/Configuration/LoggerDestructuringConfiguration.cs
+public LoggerConfiguration AsScalar(Type scalarType)
+public LoggerConfiguration AsScalar<TScalar>()
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Destructure.AsScalar<XmlDocument>()
+    .Destructure.AsScalar(typeof(Version))
+    .WriteTo.Console()
+    .CreateLogger();
+
+var doc = new XmlDocument();
+logger.Information("{@Document}", doc);
+// Document is logged using ToString() instead of being destructured
+```
+
+<Note>
+Use `AsScalar` for types that have meaningful `ToString()` implementations or shouldn't be broken down into properties.
+</Note>
+
+## Dictionary Types
+
+Capture types as dictionaries:
+
+```csharp src/Serilog/Configuration/LoggerDestructuringConfiguration.cs
+public LoggerConfiguration AsDictionary<T>()
+    where T : IDictionary
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Destructure.AsDictionary<CustomDictionary>()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Destructuring Policies
+
+### With Method
+
+Apply custom destructuring policies:
+
+```csharp src/Serilog/Configuration/LoggerDestructuringConfiguration.cs
+public LoggerConfiguration With(params IDestructuringPolicy[] destructuringPolicies)
+public LoggerConfiguration With<TDestructuringPolicy>()
+    where TDestructuringPolicy : IDestructuringPolicy, new()
+```
+
+**Example:**
+
+```csharp
+var policy = new MyCustomPolicy();
+
+var logger = new LoggerConfiguration()
+    .Destructure.With(policy)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Creating Custom Policies
+
+```csharp
+public class SensitiveDataPolicy : IDestructuringPolicy
+{
+    public bool TryDestructure(
+        object value,
+        ILogEventPropertyValueFactory propertyValueFactory,
+        out LogEventPropertyValue result)
+    {
+        if (value is CreditCard card)
+        {
+            result = new StructureValue(new[]
+            {
+                new LogEventProperty("Last4", new ScalarValue(card.Number.Substring(12))),
+                new LogEventProperty("Type", new ScalarValue(card.Type))
+            });
+            return true;
+        }
+        
+        result = null;
+        return false;
+    }
+}
+
+var logger = new LoggerConfiguration()
+    .Destructure.With<SensitiveDataPolicy>()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Transformations
+
+### ByTransforming
+
+Transform instances of a specific type:
+
+```csharp src/Serilog/Configuration/LoggerDestructuringConfiguration.cs
+public LoggerConfiguration ByTransforming<TValue>(
+    Func<TValue, object> transformation)
+```
+
+**Example:**
+
+```csharp test/Serilog.Tests/Configuration/LoggerConfigurationTests.cs:186-206
+class AB
+{
+    public int A { get; set; }
+    public int B { get; set; }
+}
+
+var logger = new LoggerConfiguration()
+    .WriteTo.Sink(sink)
+    .Destructure.ByTransforming<AB>(ab => new { C = ab.B })
+    .CreateLogger();
+
+logger.Information("{@AB}", new AB { A = 1, B = 2 });
+// Captured as: { C: 2 }
+```
+
+### ByTransformingWhere
+
+Transform instances matching a predicate:
+
+```csharp src/Serilog/Configuration/LoggerDestructuringConfiguration.cs
+public LoggerConfiguration ByTransformingWhere<TValue>(
+    Func<Type, bool> predicate,
+    Func<TValue, object> transformation)
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Destructure.ByTransformingWhere<object>(
+        type => type.Namespace?.StartsWith("MyCompany.Internal") == true,
+        obj => "[Internal Object]")
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+<Warning>
+Avoid intensive work in the predicate as it can slow down the logging pipeline significantly.
+</Warning>
+
+## Maximum Depth
+
+Limit destructuring depth to prevent ballooning space with recursive structures:
+
+```csharp src/Serilog/Configuration/LoggerDestructuringConfiguration.cs
+public LoggerConfiguration ToMaximumDepth(int maximumDestructuringDepth)
+```
+
+**Default:** 10 levels
+
+**Example:**
+
+```csharp test/Serilog.Tests/Configuration/LoggerConfigurationTests.cs:303-324
+var x = new
+{
+    A = new
+    {
+        B = new
+        {
+            C = new
+            {
+                D = "F"
+            }
+        }
+    }
+};
+
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumDepth(3)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("{@Object}", x);
+// C is captured, but D (depth 4) is not
+```
+
+<Note>
+The default maximum depth is 10. Increase this if you have deep object hierarchies, but be aware of performance implications.
+</Note>
+
+## Maximum String Length
+
+Restrict string length in destructured objects:
+
+```csharp src/Serilog/Configuration/LoggerDestructuringConfiguration.cs
+public LoggerConfiguration ToMaximumStringLength(int maximumStringLength)
+```
+
+**Default:** `int.MaxValue` (unlimited)
+
+**Minimum:** 2 characters
+
+**Example:**
+
+```csharp test/Serilog.Tests/Configuration/LoggerConfigurationTests.cs:344-351
+var x = "ABCD";
+
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumStringLength(3)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("{@Value}", x);
+// Captured as: "AB…"
+```
+
+### When It Applies
+
+<CodeGroup>
+```csharp Destructured (@)
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumStringLength(10)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("{@Value}", "Very long string...");
+// String is truncated with ellipsis
+```
+
+```csharp Regular (No @)
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumStringLength(10)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("{Value}", "Very long string...");
+// String is NOT truncated (not destructured)
+```
+
+```csharp In Objects
+var obj = new { Description = "Very long description..." };
+
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumStringLength(10)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("{@Object}", obj);
+// Description property is truncated
+```
+</CodeGroup>
+
+## Maximum Collection Count
+
+Limit collection sizes in destructured objects:
+
+```csharp src/Serilog/Configuration/LoggerDestructuringConfiguration.cs
+public LoggerConfiguration ToMaximumCollectionCount(int maximumCollectionCount)
+```
+
+**Default:** `int.MaxValue` (unlimited)
+
+**Minimum:** 1 item
+
+**Example:**
+
+```csharp test/Serilog.Tests/Configuration/LoggerConfigurationTests.cs:430-439
+var x = new[] { 1, 2, 3, 4 };
+
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumCollectionCount(3)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("{@Array}", x);
+// Captured as: [1, 2, 3] (4 is omitted)
+```
+
+### Applies to All IEnumerable
+
+The limit applies to:
+- Arrays
+- Lists
+- Dictionaries (counts key-value pairs)
+- Any `IEnumerable` implementation
+
+```csharp test/Serilog.Tests/Configuration/LoggerConfigurationTests.cs:442-455
+var dict = new Dictionary<string, int>
+{
+    { "1", 1 },
+    { "2", 2 },
+    { "3", 3 }
+};
+
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumCollectionCount(2)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("{@Dict}", dict);
+// Only first 2 entries are captured
+```
+
+## Complete Example
+
+Combining destructuring configurations:
+
+```csharp
+public class SecureLogger
+{
+    public static ILogger Create()
+    {
+        return new LoggerConfiguration()
+            // Limit depths and sizes
+            .Destructure.ToMaximumDepth(5)
+            .Destructure.ToMaximumStringLength(1000)
+            .Destructure.ToMaximumCollectionCount(50)
+            
+            // Treat certain types as scalars
+            .Destructure.AsScalar<Version>()
+            .Destructure.AsScalar<IPAddress>()
+            
+            // Transform sensitive data
+            .Destructure.ByTransforming<CreditCard>(cc => new
+            {
+                Last4 = cc.Number.Substring(12),
+                Type = cc.Type
+            })
+            
+            // Custom policies
+            .Destructure.With<SensitiveDataPolicy>()
+            
+            .WriteTo.Console()
+            .CreateLogger();
+    }
+}
+```
+
+## Performance Considerations
+
+<Steps>
+  <Step title="Destructuring is expensive">
+    Use the `@` operator only when you need structured data:
+    
+    ```csharp
+    // Expensive - destructures the entire object
+    logger.Information("Order: {@Order}", order);
+    
+    // Cheap - uses ToString()
+    logger.Information("Order: {Order}", order);
+    
+    // Cheapest - extracts specific values
+    logger.Information("Order {OrderId} total {Total}", order.Id, order.Total);
+    ```
+  </Step>
+
+  <Step title="Set reasonable limits">
+    Configure appropriate limits for your use case:
+    
+    ```csharp
+    .Destructure.ToMaximumDepth(5)              // Prevent deep recursion
+    .Destructure.ToMaximumStringLength(1000)    // Prevent huge strings
+    .Destructure.ToMaximumCollectionCount(100)  // Prevent large collections
+    ```
+  </Step>
+
+  <Step title="Use transformations for sensitive data">
+    Transform or redact sensitive information:
+    
+    ```csharp
+    .Destructure.ByTransforming<User>(u => new
+    {
+        u.Id,
+        u.Username,
+        Email = u.Email.Contains("@") ? "***@" + u.Email.Split('@')[1] : "***"
+    })
+    ```
+  </Step>
+</Steps>

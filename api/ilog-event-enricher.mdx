@@ -1,0 +1,214 @@
+---
+title: ILogEventEnricher
+description: Interface for adding contextual information to log events in Serilog
+---
+
+The `ILogEventEnricher` interface enables you to add additional properties to log events as they flow through the logging pipeline. Enrichers are commonly used to add contextual information like machine name, environment, user identity, correlation IDs, or any other ambient data.
+
+## Interface Definition
+
+```csharp
+public interface ILogEventEnricher
+{
+    void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory);
+}
+```
+
+## Methods
+
+### Enrich
+
+Enriches the log event by adding properties to it.
+
+```csharp
+void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+```
+
+<ParamField path="logEvent" type="LogEvent" required>
+  The log event to enrich. Properties can be added to this event using the `AddPropertyIfAbsent()` method.
+</ParamField>
+
+<ParamField path="propertyFactory" type="ILogEventPropertyFactory" required>
+  Factory for creating new properties to add to the event. Use this to create `LogEventProperty` instances with proper destructuring and formatting.
+</ParamField>
+
+## Implementation Guidance
+
+When implementing `ILogEventEnricher`, consider the following:
+
+### Adding Properties
+
+Use the property factory to create properties with proper type handling:
+
+```csharp
+public class MachineNameEnricher : ILogEventEnricher
+{
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var property = propertyFactory.CreateProperty("MachineName", Environment.MachineName);
+        logEvent.AddPropertyIfAbsent(property);
+    }
+}
+```
+
+### Performance Considerations
+
+- Keep `Enrich()` fast as it's called for every log event
+- Cache expensive computations or lookups
+- Avoid I/O operations or external calls
+- Consider lazy evaluation for expensive properties
+
+### Thread Safety
+
+Enrichers must be thread-safe as they may be called concurrently:
+
+```csharp
+public class ThreadSafeEnricher : ILogEventEnricher
+{
+    private readonly string _cachedValue;
+    
+    public ThreadSafeEnricher()
+    {
+        // Compute once in constructor
+        _cachedValue = ExpensiveComputation();
+    }
+    
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        // Use cached value - no synchronization needed
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty("CachedValue", _cachedValue));
+    }
+}
+```
+
+### Property Naming
+
+Follow consistent naming conventions:
+- Use PascalCase for property names
+- Choose descriptive, unambiguous names
+- Avoid conflicts with common property names like "Message", "Level", or "Timestamp"
+
+## Example Implementations
+
+### Environment Enricher
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+
+public class EnvironmentEnricher : ILogEventEnricher
+{
+    private readonly string _environmentName;
+    
+    public EnvironmentEnricher(string environmentName)
+    {
+        _environmentName = environmentName;
+    }
+    
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty("Environment", _environmentName));
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .Enrich.With(new EnvironmentEnricher("Production"))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Correlation ID Enricher
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Threading;
+
+public class CorrelationIdEnricher : ILogEventEnricher
+{
+    private static readonly AsyncLocal<string> _correlationId = new AsyncLocal<string>();
+    
+    public static string CorrelationId
+    {
+        get => _correlationId.Value ??= Guid.NewGuid().ToString();
+        set => _correlationId.Value = value;
+    }
+    
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty("CorrelationId", CorrelationId));
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .Enrich.With<CorrelationIdEnricher>()
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Set correlation ID per request/operation
+CorrelationIdEnricher.CorrelationId = "abc-123";
+Log.Information("Processing request"); // Includes CorrelationId: abc-123
+```
+
+### Process Information Enricher
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Diagnostics;
+
+public class ProcessInfoEnricher : ILogEventEnricher
+{
+    private readonly int _processId;
+    private readonly string _processName;
+    
+    public ProcessInfoEnricher()
+    {
+        var process = Process.GetCurrentProcess();
+        _processId = process.Id;
+        _processName = process.ProcessName;
+    }
+    
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty("ProcessId", _processId));
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty("ProcessName", _processName));
+    }
+}
+```
+
+## Configuration Methods
+
+Enrichers can be added to the logging pipeline using various methods:
+
+```csharp
+// Add a specific enricher instance
+Log.Logger = new LoggerConfiguration()
+    .Enrich.With(new EnvironmentEnricher("Production"))
+    .CreateLogger();
+
+// Add an enricher by type (requires parameterless constructor)
+Log.Logger = new LoggerConfiguration()
+    .Enrich.With<ProcessInfoEnricher>()
+    .CreateLogger();
+
+// Add multiple enrichers
+Log.Logger = new LoggerConfiguration()
+    .Enrich.With(new EnvironmentEnricher("Production"))
+    .Enrich.With<CorrelationIdEnricher>()
+    .Enrich.With<ProcessInfoEnricher>()
+    .CreateLogger();
+```
+
+## Related Interfaces
+
+- `ILogEventPropertyFactory` - Factory for creating properties with proper destructuring
+- `ILogEventFilter` - For filtering log events based on conditions
+- `IDestructuringPolicy` - For customizing how complex objects are converted to properties

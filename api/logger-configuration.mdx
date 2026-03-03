@@ -1,0 +1,215 @@
+---
+title: LoggerConfiguration Class
+description: Configuration object for creating ILogger instances.
+---
+
+Configuration object for creating `ILogger` instances. Use this class to configure sinks, enrichers, filters, and other logger settings before creating a logger.
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .WriteTo.Console()
+    .WriteTo.File("logs/myapp.txt")
+    .Enrich.WithProperty("Application", "MyApp")
+    .CreateLogger();
+```
+
+## Constructor
+
+### LoggerConfiguration()
+
+Construct a `LoggerConfiguration`.
+
+```csharp
+var config = new LoggerConfiguration();
+```
+
+## Configuration Properties
+
+### WriteTo
+
+Configures the sinks that log events will be emitted to.
+
+<ResponseField name="type" type="LoggerSinkConfiguration">
+  Configuration object for adding sinks.
+</ResponseField>
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.File("logs/app.txt")
+    .CreateLogger();
+```
+
+### AuditTo
+
+Configures sinks for auditing, instead of regular (safe) logging. When auditing is used, exceptions from sinks and any intermediate filters propagate back to the caller. Most callers should use `WriteTo` instead.
+
+<ResponseField name="type" type="LoggerAuditSinkConfiguration">
+  Configuration object for adding audit sinks.
+</ResponseField>
+
+<Note>
+  Not all sinks are compatible with transactional auditing requirements (many will use asynchronous batching to improve write throughput and latency). Sinks need to opt-in to auditing support by extending `LoggerAuditSinkConfiguration`.
+</Note>
+
+### MinimumLevel
+
+Configures the minimum level at which events will be passed to sinks. If not specified, only events at the `Information` level and above will be passed through.
+
+<ResponseField name="type" type="LoggerMinimumLevelConfiguration">
+  Configuration object allowing method chaining.
+</ResponseField>
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .CreateLogger();
+```
+
+### Enrich
+
+Configures enrichment of `LogEvent`s. Enrichers can add, remove and modify the properties associated with events.
+
+<ResponseField name="type" type="LoggerEnrichmentConfiguration">
+  Configuration object for adding enrichers.
+</ResponseField>
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Enrich.WithProperty("Version", "1.0.0")
+    .Enrich.WithMachineName()
+    .CreateLogger();
+```
+
+### Filter
+
+Configures global filtering of `LogEvent`s.
+
+<ResponseField name="type" type="LoggerFilterConfiguration">
+  Configuration object for adding filters.
+</ResponseField>
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Filter.ByExcluding(logEvent => logEvent.Level == LogEventLevel.Verbose)
+    .CreateLogger();
+```
+
+### Destructure
+
+Configures destructuring of message template parameters.
+
+<ResponseField name="type" type="LoggerDestructuringConfiguration">
+  Configuration object for configuring destructuring.
+</ResponseField>
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Destructure.ToMaximumDepth(4)
+    .Destructure.ToMaximumStringLength(100)
+    .Destructure.ToMaximumCollectionCount(10)
+    .CreateLogger();
+```
+
+### ReadFrom
+
+Apply external settings to the logger configuration.
+
+<ResponseField name="type" type="LoggerSettingsConfiguration">
+  Configuration object for reading settings from external sources.
+</ResponseField>
+
+```csharp
+var logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(configuration)
+    .CreateLogger();
+```
+
+## Methods
+
+### CreateLogger()
+
+Create a logger using the configured sinks, enrichers and minimum level.
+
+<ResponseField name="returns" type="Logger">
+  The configured logger instance.
+</ResponseField>
+
+<Note>
+  To free resources held by sinks ahead of program shutdown, the returned logger may be cast to `IDisposable` and disposed.
+</Note>
+
+<Warning>
+  Throws `InvalidOperationException` when the logger is already created. `CreateLogger()` can only be called once per `LoggerConfiguration` instance.
+</Warning>
+
+```csharp
+var config = new LoggerConfiguration()
+    .WriteTo.Console();
+
+var logger = config.CreateLogger();
+
+// This will throw InvalidOperationException:
+// var logger2 = config.CreateLogger();
+```
+
+## Usage Examples
+
+### Basic Configuration
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Information("Application started");
+```
+
+### Advanced Configuration
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
+    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .Enrich.WithMachineName()
+    .Enrich.WithProperty("Environment", "Production")
+    .WriteTo.Console(
+        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.File(
+        "logs/app-.txt",
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 7)
+    .Destructure.ToMaximumDepth(4)
+    .Destructure.ToMaximumStringLength(100)
+    .CreateLogger();
+```
+
+### Using Level Switches
+
+```csharp
+var levelSwitch = new LoggingLevelSwitch();
+
+var logger = new LoggerConfiguration()
+    .MinimumLevel.ControlledBy(levelSwitch)
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Change the minimum level at runtime
+levelSwitch.MinimumLevel = LogEventLevel.Warning;
+```
+
+### Filtering Events
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .Filter.ByExcluding(logEvent => 
+        logEvent.Properties.ContainsKey("SensitiveData"))
+    .Filter.ByIncludingOnly(logEvent => 
+        logEvent.Level >= LogEventLevel.Information)
+    .CreateLogger();
+```

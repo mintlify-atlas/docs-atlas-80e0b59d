@@ -1,0 +1,300 @@
+---
+title: "LoggingLevelSwitch"
+description: "Dynamically control the minimum logging level at runtime"
+---
+
+## Overview
+
+The `LoggingLevelSwitch` class allows you to dynamically change the minimum logging level of a logger at runtime. This is useful for temporarily increasing log verbosity for debugging without restarting your application.
+
+```csharp
+public class LoggingLevelSwitch
+```
+
+**Namespace:** `Serilog.Core`
+
+## Constructor
+
+### LoggingLevelSwitch
+
+Create a new LoggingLevelSwitch at the specified initial minimum level.
+
+```csharp
+public LoggingLevelSwitch(
+    LogEventLevel initialMinimumLevel = LogEventLevel.Information
+)
+```
+
+<ParamField path="initialMinimumLevel" type="LogEventLevel" default="LogEventLevel.Information">
+  The initial level to which the switch is set. Defaults to `Information` if not specified.
+</ParamField>
+
+**Example:**
+
+```csharp
+// Create a switch starting at Information level
+var levelSwitch = new LoggingLevelSwitch();
+
+// Create a switch starting at Debug level
+var debugSwitch = new LoggingLevelSwitch(LogEventLevel.Debug);
+```
+
+## Properties
+
+### MinimumLevel
+
+Gets or sets the current minimum level, below which no events should be generated.
+
+```csharp
+public LogEventLevel MinimumLevel { get; set; }
+```
+
+<ResponseField name="MinimumLevel" type="LogEventLevel">
+  The current minimum logging level. Reading this property generates a memory barrier.
+</ResponseField>
+
+**Example:**
+
+```csharp
+var levelSwitch = new LoggingLevelSwitch();
+
+// Check current level
+var currentLevel = levelSwitch.MinimumLevel; // Information
+
+// Change to Debug level
+levelSwitch.MinimumLevel = LogEventLevel.Debug;
+
+// Change to Warning level
+levelSwitch.MinimumLevel = LogEventLevel.Warning;
+```
+
+## Events
+
+### MinimumLevelChanged
+
+Event that fires when the MinimumLevel property changes.
+
+```csharp
+public event EventHandler<LoggingLevelSwitchChangedEventArgs>? MinimumLevelChanged
+```
+
+<Warning>
+  The event is raised under a lock. Be careful within event handlers to avoid deadlocks.
+</Warning>
+
+**Example:**
+
+```csharp
+var levelSwitch = new LoggingLevelSwitch();
+
+levelSwitch.MinimumLevelChanged += (sender, args) =>
+{
+    Console.WriteLine($"Level changed from {args.OldLevel} to {args.NewLevel}");
+};
+
+levelSwitch.MinimumLevel = LogEventLevel.Debug;
+// Outputs: Level changed from Information to Debug
+```
+
+## Usage Examples
+
+### Basic Configuration
+
+Configure a logger with a level switch:
+
+```csharp
+var levelSwitch = new LoggingLevelSwitch();
+
+var log = new LoggerConfiguration()
+    .MinimumLevel.ControlledBy(levelSwitch)
+    .WriteTo.Console()
+    .CreateLogger();
+
+Log.Debug("This won't be logged");
+Log.Information("This will be logged");
+
+// Change level at runtime
+levelSwitch.MinimumLevel = LogEventLevel.Debug;
+
+Log.Debug("Now this will be logged");
+```
+
+### Temporary Debug Mode
+
+Temporarily increase logging verbosity:
+
+```csharp
+var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+
+var log = new LoggerConfiguration()
+    .MinimumLevel.ControlledBy(levelSwitch)
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Normal operation
+Log.Debug("Not logged");
+Log.Information("Logged");
+
+// Enable debug mode
+var previousLevel = levelSwitch.MinimumLevel;
+levelSwitch.MinimumLevel = LogEventLevel.Verbose;
+
+try
+{
+    Log.Verbose("Detailed diagnostic information");
+    Log.Debug("Debug information");
+    // Perform debugging...
+}
+finally
+{
+    // Restore previous level
+    levelSwitch.MinimumLevel = previousLevel;
+}
+```
+
+### Remote Control via API
+
+Allow runtime control through an API endpoint:
+
+```csharp
+public class Startup
+{
+    private static readonly LoggingLevelSwitch LevelSwitch = 
+        new LoggingLevelSwitch();
+    
+    public void ConfigureServices(IServiceCollection services)
+    {
+        // Make the switch available for dependency injection
+        services.AddSingleton(LevelSwitch);
+        
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.ControlledBy(LevelSwitch)
+            .WriteTo.Console()
+            .CreateLogger();
+    }
+}
+
+[ApiController]
+[Route("api/[controller]")]
+public class LogLevelController : ControllerBase
+{
+    private readonly LoggingLevelSwitch _levelSwitch;
+    
+    public LogLevelController(LoggingLevelSwitch levelSwitch)
+    {
+        _levelSwitch = levelSwitch;
+    }
+    
+    [HttpGet]
+    public IActionResult GetLevel()
+    {
+        return Ok(new { level = _levelSwitch.MinimumLevel.ToString() });
+    }
+    
+    [HttpPost]
+    public IActionResult SetLevel([FromBody] string level)
+    {
+        if (Enum.TryParse<LogEventLevel>(level, out var logLevel))
+        {
+            _levelSwitch.MinimumLevel = logLevel;
+            return Ok(new { level = logLevel.ToString() });
+        }
+        
+        return BadRequest("Invalid log level");
+    }
+}
+```
+
+### Multiple Level Switches
+
+Use different switches for different logging pipelines:
+
+```csharp
+var consoleLevelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+var fileLevelSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
+
+var log = new LoggerConfiguration()
+    .WriteTo.Console(
+        levelSwitch: consoleLevelSwitch)
+    .WriteTo.File("log.txt", 
+        levelSwitch: fileLevelSwitch)
+    .CreateLogger();
+
+Log.Information("Appears in console only");
+Log.Warning("Appears in both console and file");
+
+// Independently control each sink
+consoleLevelSwitch.MinimumLevel = LogEventLevel.Debug;
+fileLevelSwitch.MinimumLevel = LogEventLevel.Error;
+```
+
+### Monitoring Level Changes
+
+Track and log level changes:
+
+```csharp
+var levelSwitch = new LoggingLevelSwitch();
+
+levelSwitch.MinimumLevelChanged += (sender, args) =>
+{
+    Log.Information(
+        "Logging level changed from {OldLevel} to {NewLevel}",
+        args.OldLevel,
+        args.NewLevel);
+};
+
+var log = new LoggerConfiguration()
+    .MinimumLevel.ControlledBy(levelSwitch)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Configuration from appsettings.json
+
+Define a level switch in configuration:
+
+```json
+{
+  "Serilog": {
+    "LevelSwitches": {
+      "$controlSwitch": "Information"
+    },
+    "MinimumLevel": {
+      "ControlledBy": "$controlSwitch"
+    },
+    "WriteTo": [
+      { "Name": "Console" }
+    ]
+  }
+}
+```
+
+```csharp
+var configuration = new ConfigurationBuilder()
+    .AddJsonFile("appsettings.json")
+    .Build();
+
+var log = new LoggerConfiguration()
+    .ReadFrom.Configuration(configuration)
+    .CreateLogger();
+
+// Access the switch from configuration
+var controlSwitch = Log.Logger.GetType()
+    .GetField("_levelSwitch", BindingFlags.NonPublic | BindingFlags.Instance)
+    ?.GetValue(Log.Logger) as LoggingLevelSwitch;
+
+if (controlSwitch != null)
+{
+    controlSwitch.MinimumLevel = LogEventLevel.Debug;
+}
+```
+
+## Performance Considerations
+
+<Note>
+  Reading the `MinimumLevel` property generates a memory barrier. Use the level switch judiciously in high-performance logging pipelines.
+</Note>
+
+## Thread Safety
+
+The `LoggingLevelSwitch` is thread-safe. The `MinimumLevel` property is marked as `volatile` and level changes are protected by a lock to ensure consistency.

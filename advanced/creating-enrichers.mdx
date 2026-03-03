@@ -1,0 +1,298 @@
+---
+title: Creating Custom Enrichers
+description: Build custom enrichers by implementing ILogEventEnricher to add contextual information to log events
+---
+
+Enrichers add additional properties to log events during the logging pipeline. They're executed before sinks receive events, allowing you to attach contextual information to all log entries.
+
+## The ILogEventEnricher Interface
+
+Custom enrichers implement the `ILogEventEnricher` interface:
+
+```csharp
+public interface ILogEventEnricher
+{
+    /// <summary>
+    /// Enrich the log event.
+    /// </summary>
+    /// <param name="logEvent">The log event to enrich.</param>
+    /// <param name="propertyFactory">Factory for creating new properties to add to the event.</param>
+    void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory);
+}
+```
+
+## Simple Property Enricher
+
+The most common enricher adds a fixed property to all events:
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+
+public class EnvironmentEnricher : ILogEventEnricher
+{
+    private readonly string _environmentName;
+
+    public EnvironmentEnricher(string environmentName)
+    {
+        _environmentName = environmentName;
+    }
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var property = propertyFactory.CreateProperty("Environment", _environmentName);
+        logEvent.AddPropertyIfAbsent(property);
+    }
+}
+```
+
+<Note>
+Use `AddPropertyIfAbsent` to avoid overwriting properties that may have been set explicitly by the caller.
+</Note>
+
+## The PropertyEnricher Class
+
+Serilog provides a built-in `PropertyEnricher` for simple cases:
+
+```csharp
+public class PropertyEnricher : ILogEventEnricher
+{
+    private readonly string _name;
+    private readonly object _value;
+    private readonly bool _destructureObjects;
+
+    public PropertyEnricher(string name, object value, bool destructureObjects = false)
+    {
+        LogEventProperty.EnsureValidName(name);
+        _name = name;
+        _value = value;
+        _destructureObjects = destructureObjects;
+    }
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty(_name, _value, _destructureObjects));
+    }
+}
+```
+
+## Dynamic Value Enricher
+
+Enrich events with values computed at the time of logging:
+
+```csharp
+public class MachineNameEnricher : ILogEventEnricher
+{
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var machineName = Environment.MachineName;
+        var property = propertyFactory.CreateProperty("MachineName", machineName);
+        logEvent.AddPropertyIfAbsent(property);
+    }
+}
+```
+
+## Thread-Aware Enricher
+
+Add thread-specific information:
+
+```csharp
+public class ThreadIdEnricher : ILogEventEnricher
+{
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var threadId = Thread.CurrentThread.ManagedThreadId;
+        var property = propertyFactory.CreateProperty("ThreadId", threadId);
+        logEvent.AddPropertyIfAbsent(property);
+    }
+}
+```
+
+## Using ILogEventPropertyFactory
+
+The property factory handles serialization policies:
+
+```csharp
+public class UserContextEnricher : ILogEventEnricher
+{
+    private readonly IUserContext _userContext;
+
+    public UserContextEnricher(IUserContext userContext)
+    {
+        _userContext = userContext;
+    }
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var currentUser = _userContext.GetCurrentUser();
+
+        if (currentUser != null)
+        {
+            // Scalar value (string)
+            logEvent.AddPropertyIfAbsent(
+                propertyFactory.CreateProperty("UserId", currentUser.Id));
+
+            // Destructured object - serializes properties
+            logEvent.AddPropertyIfAbsent(
+                propertyFactory.CreateProperty("User", currentUser, destructureObjects: true));
+        }
+    }
+}
+```
+
+<Steps>
+
+<Step title="Scalar values">
+Pass `destructureObjects: false` (default) for simple types like strings, numbers, and enums.
+</Step>
+
+<Step title="Complex objects">
+Pass `destructureObjects: true` to serialize object properties instead of calling `ToString()`.
+</Step>
+
+</Steps>
+
+## Configuration Extension Methods
+
+Enable fluent configuration:
+
+```csharp
+using Serilog;
+using Serilog.Configuration;
+
+public static class EnvironmentEnricherExtensions
+{
+    public static LoggerConfiguration WithEnvironment(
+        this LoggerEnrichmentConfiguration enrichmentConfiguration,
+        string environmentName)
+    {
+        if (enrichmentConfiguration == null)
+            throw new ArgumentNullException(nameof(enrichmentConfiguration));
+
+        return enrichmentConfiguration.With(new EnvironmentEnricher(environmentName));
+    }
+}
+```
+
+Usage:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Enrich.WithEnvironment("Production")
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Conditional Enrichment
+
+Enrich only when certain conditions are met:
+
+```csharp
+public class ConditionalEnricher : ILogEventEnricher
+{
+    private readonly ILogEventEnricher _enricher;
+    private readonly Func<LogEvent, bool> _condition;
+
+    public ConditionalEnricher(
+        ILogEventEnricher enricher,
+        Func<LogEvent, bool> condition)
+    {
+        _enricher = enricher;
+        _condition = condition;
+    }
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        if (_condition(logEvent))
+        {
+            _enricher.Enrich(logEvent, propertyFactory);
+        }
+    }
+}
+```
+
+Example usage:
+
+```csharp
+var enricher = new ConditionalEnricher(
+    new EnvironmentEnricher("Production"),
+    logEvent => logEvent.Level >= LogEventLevel.Warning
+);
+```
+
+## Performance Considerations
+
+<Warning>
+Enrichers run for every log event. Avoid expensive operations like database queries or HTTP requests.
+</Warning>
+
+### Caching Strategy
+
+```csharp
+public class CachedEnricher : ILogEventEnricher
+{
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(5);
+    private DateTime _cacheExpiry = DateTime.MinValue;
+    private LogEventProperty _cachedProperty;
+    private readonly object _sync = new object();
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var now = DateTime.UtcNow;
+        
+        if (_cachedProperty == null || now >= _cacheExpiry)
+        {
+            lock (_sync)
+            {
+                if (_cachedProperty == null || now >= _cacheExpiry)
+                {
+                    var expensiveValue = ComputeExpensiveValue();
+                    _cachedProperty = propertyFactory.CreateProperty("ExpensiveData", expensiveValue);
+                    _cacheExpiry = now.Add(_cacheDuration);
+                }
+            }
+        }
+
+        logEvent.AddPropertyIfAbsent(_cachedProperty);
+    }
+
+    private object ComputeExpensiveValue()
+    {
+        // Expensive computation here
+        return "computed value";
+    }
+}
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Keep enrichers lightweight">
+Enrichers execute synchronously in the logging pipeline. Fast execution is critical.
+</Step>
+
+<Step title="Use AddPropertyIfAbsent">
+Respect explicitly-set properties by using `AddPropertyIfAbsent` instead of `AddOrUpdateProperty`.
+</Step>
+
+<Step title="Handle null values gracefully">
+Check for null values before creating properties to avoid polluting logs with null entries.
+</Step>
+
+<Step title="Cache expensive computations">
+If a value is expensive to compute, cache it with appropriate invalidation logic.
+</Step>
+
+<Step title="Avoid side effects">
+Enrichers should be read-only. Don't modify external state from enrichment logic.
+</Step>
+
+</Steps>
+
+## Next Steps
+
+- Learn about [creating custom sinks](/advanced/creating-sinks)
+- Explore [creating custom filters](/advanced/creating-filters)
+- Understand [logger lifecycle and disposal](/advanced/lifecycle)

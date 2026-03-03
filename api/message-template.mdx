@@ -1,0 +1,207 @@
+---
+title: MessageTemplate
+description: Represents a message template that can render textual messages given property values
+---
+
+## Overview
+
+The `MessageTemplate` class represents a parsed message template string. It contains text and property tokens that can be rendered into a final message string given the associated property values.
+
+## Constructors
+
+### MessageTemplate(IEnumerable\<MessageTemplateToken\>)
+
+Construct a message template using manually-defined text and property tokens.
+
+<ParamField path="tokens" type="IEnumerable<MessageTemplateToken>" required>
+  The text and property tokens defining the template.
+</ParamField>
+
+```csharp
+var tokens = new MessageTemplateToken[] 
+{ 
+    new TextToken("User "),
+    new PropertyToken("Username"),
+    new TextToken(" logged in")
+};
+var template = new MessageTemplate(tokens);
+```
+
+### MessageTemplate(string, IEnumerable\<MessageTemplateToken\>)
+
+Construct a message template using manually-defined text and property tokens with the full template text.
+
+<ParamField path="text" type="string" required>
+  The full text of the template; used by Serilog internally to avoid unneeded string concatenation.
+</ParamField>
+
+<ParamField path="tokens" type="IEnumerable<MessageTemplateToken>" required>
+  The text and property tokens defining the template.
+</ParamField>
+
+**Exceptions:**
+- `ArgumentNullException` - When `text` or `tokens` is null
+
+```csharp
+var template = new MessageTemplate(
+    "User {Username} logged in",
+    tokens
+);
+```
+
+## Properties
+
+<ResponseField name="Empty" type="MessageTemplate" static>
+  A static property representing the empty message template.
+</ResponseField>
+
+<ResponseField name="Text" type="string">
+  The raw text describing the template. This is the original template string before parsing.
+</ResponseField>
+
+<ResponseField name="Tokens" type="IEnumerable<MessageTemplateToken>">
+  The tokens parsed from the template. This includes both text tokens and property tokens.
+</ResponseField>
+
+## Methods
+
+### Render(IReadOnlyDictionary\<string, LogEventPropertyValue\>, IFormatProvider)
+
+Convert the message template into a textual message, given the properties matching the tokens in the message template.
+
+<ParamField path="properties" type="IReadOnlyDictionary<string, LogEventPropertyValue>" required>
+  Properties matching template tokens.
+</ParamField>
+
+<ParamField path="formatProvider" type="IFormatProvider">
+  Supplies culture-specific formatting information, or null.
+</ParamField>
+
+**Returns:** `string` - The message created from the template and properties. If the properties are mismatched with the template, the template will be returned with incomplete substitution.
+
+**Exceptions:**
+- `ArgumentNullException` - When `properties` is null
+
+```csharp
+var properties = new Dictionary<string, LogEventPropertyValue>
+{
+    ["Username"] = new ScalarValue("alice"),
+    ["Action"] = new ScalarValue("login")
+};
+
+string message = template.Render(properties);
+// Result: "User alice performed login"
+```
+
+### Render(IReadOnlyDictionary\<string, LogEventPropertyValue\>, TextWriter, IFormatProvider)
+
+Convert the message template into a textual message and write it to the specified output.
+
+<ParamField path="properties" type="IReadOnlyDictionary<string, LogEventPropertyValue>" required>
+  Properties matching template tokens.
+</ParamField>
+
+<ParamField path="output" type="TextWriter" required>
+  The text writer to output the rendered message to.
+</ParamField>
+
+<ParamField path="formatProvider" type="IFormatProvider">
+  Supplies culture-specific formatting information, or null.
+</ParamField>
+
+**Exceptions:**
+- `ArgumentNullException` - When `properties` or `output` is null
+
+```csharp
+var writer = new StringWriter();
+template.Render(properties, writer);
+string message = writer.ToString();
+```
+
+### ToString()
+
+Render the template as a string. Returns the raw template text.
+
+**Returns:** `string` - The string representation of the template (the Text property).
+
+```csharp
+string templateText = template.ToString();
+// Result: "User {Username} performed {Action}"
+```
+
+## Usage Examples
+
+### Basic Template
+
+```csharp
+var parser = new MessageTemplateParser();
+var template = parser.Parse("Hello, {Name}!");
+
+var properties = new Dictionary<string, LogEventPropertyValue>
+{
+    ["Name"] = new ScalarValue("World")
+};
+
+string result = template.Render(properties);
+// Output: "Hello, World!"
+```
+
+### Template with Formatting
+
+```csharp
+var template = parser.Parse("Order total: {Amount:C}");
+
+var properties = new Dictionary<string, LogEventPropertyValue>
+{
+    ["Amount"] = new ScalarValue(123.45m)
+};
+
+var culture = new CultureInfo("en-US");
+string result = template.Render(properties, culture);
+// Output: "Order total: $123.45"
+```
+
+### Template with Multiple Properties
+
+```csharp
+var template = parser.Parse(
+    "User {UserId} performed {Action} at {Timestamp:yyyy-MM-dd HH:mm:ss}"
+);
+
+var properties = new Dictionary<string, LogEventPropertyValue>
+{
+    ["UserId"] = new ScalarValue(42),
+    ["Action"] = new ScalarValue("login"),
+    ["Timestamp"] = new ScalarValue(DateTime.Now)
+};
+
+string result = template.Render(properties);
+```
+
+### Empty Template
+
+```csharp
+var empty = MessageTemplate.Empty;
+string result = empty.Render(new Dictionary<string, LogEventPropertyValue>());
+// Output: ""
+```
+
+## Template Syntax
+
+Message templates support:
+
+- **Named properties**: `{PropertyName}`
+- **Positional properties**: `{0}`, `{1}`, etc.
+- **Format strings**: `{Amount:C}`, `{Date:yyyy-MM-dd}`
+- **Destructuring**: `{@Object}` for structured logging
+- **Stringification**: `{$Object}` to force ToString()
+
+<Warning>
+  Mixing positional and named properties in the same template is not supported and will generate a self-log warning. Templates should use either all named or all positional properties.
+</Warning>
+
+## Performance Notes
+
+- The `MessageTemplate` class caches parsed tokens for efficient reuse
+- Using the constructor with both text and tokens avoids string concatenation overhead
+- Templates are immutable and thread-safe

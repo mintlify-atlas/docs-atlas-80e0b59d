@@ -1,0 +1,209 @@
+---
+title: LogEventProperty
+description: Represents a named property associated with a log event
+---
+
+## Overview
+
+The `LogEventProperty` class represents a single named property attached to a log event. Each property has a name and a value, where the value is represented by a `LogEventPropertyValue`.
+
+## Constructor
+
+### LogEventProperty(string, LogEventPropertyValue)
+
+Construct a log event property with the specified name and value.
+
+<ParamField path="name" type="string" required>
+  The name of the property. Must not be null, empty, or contain only whitespace.
+</ParamField>
+
+<ParamField path="value" type="LogEventPropertyValue" required>
+  The value of the property. Must not be null.
+</ParamField>
+
+**Exceptions:**
+- `ArgumentNullException` - When `name` or `value` is null
+- `ArgumentException` - When `name` is empty or contains only whitespace
+
+```csharp
+var property = new LogEventProperty(
+    "UserId", 
+    new ScalarValue(12345)
+);
+```
+
+## Properties
+
+<ResponseField name="Name" type="string">
+  The name of the property. This is guaranteed to be non-null and non-empty.
+</ResponseField>
+
+<ResponseField name="Value" type="LogEventPropertyValue">
+  The value of the property. This can be a scalar value, structure, sequence, or dictionary value.
+</ResponseField>
+
+## Static Methods
+
+### IsValidName(string)
+
+Test a string to determine if it is a valid property name.
+
+<ParamField path="name" type="string" required>
+  The name to check.
+</ParamField>
+
+**Returns:** `bool` - true if the name is valid; otherwise, false.
+
+```csharp
+bool isValid = LogEventProperty.IsValidName("UserId");
+// Result: true
+
+bool isInvalid = LogEventProperty.IsValidName("");
+// Result: false
+
+bool isInvalid2 = LogEventProperty.IsValidName("   ");
+// Result: false
+```
+
+## Usage Examples
+
+### Creating Properties with Different Value Types
+
+```csharp
+// Scalar value
+var userIdProperty = new LogEventProperty(
+    "UserId",
+    new ScalarValue(42)
+);
+
+// String value
+var nameProperty = new LogEventProperty(
+    "UserName",
+    new ScalarValue("alice")
+);
+
+// Structure value
+var userProperty = new LogEventProperty(
+    "User",
+    new StructureValue(
+        new[] 
+        {
+            new LogEventProperty("Id", new ScalarValue(42)),
+            new LogEventProperty("Name", new ScalarValue("alice"))
+        }
+    )
+);
+
+// Sequence value
+var tagsProperty = new LogEventProperty(
+    "Tags",
+    new SequenceValue(
+        new[] 
+        {
+            new ScalarValue("important"),
+            new ScalarValue("customer")
+        }
+    )
+);
+```
+
+### Validating Property Names
+
+```csharp
+string proposedName = userInput;
+
+if (LogEventProperty.IsValidName(proposedName))
+{
+    var property = new LogEventProperty(
+        proposedName,
+        new ScalarValue(value)
+    );
+}
+else
+{
+    // Handle invalid name
+    Log.Warning("Invalid property name: {Name}", proposedName);
+}
+```
+
+### Adding Properties to Log Events
+
+```csharp
+var logEvent = new LogEvent(
+    DateTimeOffset.Now,
+    LogEventLevel.Information,
+    null,
+    messageTemplate,
+    new[] 
+    {
+        new LogEventProperty("RequestId", new ScalarValue("abc-123")),
+        new LogEventProperty("Duration", new ScalarValue(125))
+    }
+);
+
+// Or add dynamically
+var newProperty = new LogEventProperty(
+    "ResponseCode",
+    new ScalarValue(200)
+);
+logEvent.AddOrUpdateProperty(newProperty);
+```
+
+### Creating Properties from Context
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .CreateLogger();
+
+using (LogContext.PushProperty("CorrelationId", "xyz-789"))
+{
+    Log.Information("Processing request");
+    // The log event will include a LogEventProperty named "CorrelationId"
+}
+```
+
+### Property Naming Conventions
+
+```csharp
+// Good property names
+var prop1 = new LogEventProperty("UserId", value);
+var prop2 = new LogEventProperty("Request_Id", value);
+var prop3 = new LogEventProperty("response.statusCode", value);
+
+// Invalid property names (will throw ArgumentException)
+// var invalid1 = new LogEventProperty("", value);       // Empty
+// var invalid2 = new LogEventProperty("   ", value);    // Whitespace only
+// var invalid3 = new LogEventProperty(null, value);     // Null
+```
+
+## Best Practices
+
+### Naming Conventions
+
+- Use PascalCase for property names: `UserId`, `RequestId`
+- Be consistent across your application
+- Avoid special characters unless necessary
+- Use descriptive, meaningful names
+
+### Value Types
+
+- Use `ScalarValue` for simple types (strings, numbers, booleans, dates)
+- Use `StructureValue` for complex objects that should be logged as structured data
+- Use `SequenceValue` for arrays and collections
+- Use `DictionaryValue` for key-value pairs
+
+### Performance
+
+- Properties are immutable once created
+- Reuse property names as strings to reduce allocations
+- Consider using source context enrichers instead of manually adding properties
+
+```csharp
+// Good: Property name as constant
+private const string UserIdPropertyName = "UserId";
+var property = new LogEventProperty(UserIdPropertyName, new ScalarValue(userId));
+
+// Less efficient: Creating new string each time
+var property = new LogEventProperty($"User{suffix}Id", new ScalarValue(userId));
+```

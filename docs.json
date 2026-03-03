@@ -1,122 +1,118 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Serilog",
+  "theme": "linden",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#1e88e5",
+    "light": "#64b5f6",
+    "dark": "#1565c0"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/serilog/serilog"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/serilog/serilog"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/structured-logging",
+              "concepts/message-templates",
+              "concepts/log-levels",
+              "concepts/enrichment",
+              "concepts/filtering"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Configuration",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "configuration/basics",
+              "configuration/sinks",
+              "configuration/minimum-level",
+              "configuration/enrichers",
+              "configuration/destructuring",
+              "configuration/settings-files"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Guides",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "guides/sinks",
+              "guides/context",
+              "guides/formatting",
+              "guides/error-handling",
+              "guides/performance",
+              "guides/asp-net-core"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/creating-sinks",
+              "advanced/creating-enrichers",
+              "advanced/creating-filters",
+              "advanced/batching",
+              "advanced/lifecycle"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Core API",
             "pages": [
-              "api-reference/introduction"
+              "api/ilogger",
+              "api/log",
+              "api/logger-configuration"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Events",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/log-event",
+              "api/log-event-level",
+              "api/message-template",
+              "api/log-event-property"
+            ]
+          },
+          {
+            "group": "Extensibility",
+            "pages": [
+              "api/ilog-event-sink",
+              "api/ilog-event-enricher",
+              "api/ilog-event-filter",
+              "api/idestructuring-policy"
+            ]
+          },
+          {
+            "group": "Context",
+            "pages": [
+              "api/log-context",
+              "api/logging-level-switch"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

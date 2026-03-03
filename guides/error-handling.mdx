@@ -1,0 +1,473 @@
+---
+title: "Error Handling"
+description: "Handling internal errors with SelfLog and logging failures"
+---
+
+Serilog includes built-in mechanisms to handle errors that occur within the logging pipeline itself, ensuring your application remains stable even when logging fails.
+
+## SelfLog
+
+SelfLog is Serilog's internal diagnostic mechanism for reporting problems within the logging infrastructure.
+
+### Enabling SelfLog
+
+Enable SelfLog to capture internal errors:
+
+<CodeGroup>
+
+```csharp Console Output
+using Serilog.Debugging;
+
+SelfLog.Enable(Console.Error);
+```
+
+```csharp File Output
+var file = File.CreateText("/logs/serilog-errors.txt");
+SelfLog.Enable(file);
+```
+
+```csharp Custom Action
+SelfLog.Enable(msg => 
+{
+    Debug.WriteLine(msg);
+    // Or send to monitoring service
+});
+```
+
+</CodeGroup>
+
+<Note>
+Enable SelfLog **before** creating your logger configuration to capture all initialization errors.
+</Note>
+
+### What SelfLog Captures
+
+SelfLog reports various internal issues:
+
+- Sink initialization failures
+- Exceptions thrown by sinks during `Emit()`
+- Configuration errors
+- Formatter failures
+- Serialization issues
+
+**Example output:**
+```
+2026-03-03T14:23:45.1234567Z Exception while emitting periodic batch from Serilog.Sinks.Http.HttpSink: System.Net.Http.HttpRequestException: Connection refused
+```
+
+### Disabling SelfLog
+
+Disable SelfLog when you no longer need diagnostics:
+
+```csharp
+SelfLog.Disable();
+```
+
+<Tip>
+Leave SelfLog enabled in production environments to detect silent logging failures.
+</Tip>
+
+## Logging Failures
+
+Serilog provides structured failure handling through the `ILoggingFailureListener` interface.
+
+### ILoggingFailureListener
+
+Implement this interface to handle logging failures:
+
+```csharp
+public interface ILoggingFailureListener
+{
+    void OnLoggingFailed(
+        object sender,
+        LoggingFailureKind kind,
+        string message,
+        IReadOnlyCollection<LogEvent>? events,
+        Exception? exception);
+}
+```
+
+### Failure Kinds
+
+Different failure types indicate severity and handling:
+
+<CodeGroup>
+
+```csharp Temporary
+LoggingFailureKind.Temporary
+// Transient failure, will retry
+// Example: Network timeout, temporary connection issue
+```
+
+```csharp Permanent
+LoggingFailureKind.Permanent
+// Failure that won't be retried
+// Example: Invalid configuration, authorization failure
+// Events may be dropped
+```
+
+```csharp Final
+LoggingFailureKind.Final
+// Final attempt during shutdown
+// No retry possible
+```
+
+</CodeGroup>
+
+### Built-in Failure Handling
+
+Serilog includes a default listener that writes to SelfLog:
+
+```csharp
+using Serilog.Debugging;
+
+// This is used automatically by most sinks
+var listener = SelfLog.FailureListener;
+```
+
+### Custom Failure Handling
+
+```csharp
+public class MonitoringFailureListener : ILoggingFailureListener
+{
+    readonly IMetricsService _metrics;
+
+    public MonitoringFailureListener(IMetricsService metrics)
+    {
+        _metrics = metrics;
+    }
+
+    public void OnLoggingFailed(
+        object sender,
+        LoggingFailureKind kind,
+        string message,
+        IReadOnlyCollection<LogEvent>? events,
+        Exception? exception)
+    {
+        _metrics.IncrementCounter("logging_failures", new
+        {
+            Sink = sender.GetType().Name,
+            Kind = kind.ToString(),
+            EventCount = events?.Count ?? 0
+        });
+
+        if (kind == LoggingFailureKind.Permanent)
+        {
+            _metrics.Alert("Critical logging failure", exception);
+        }
+    }
+}
+```
+
+### Using with Fallback Chains
+
+Combine failure listeners with fallback chains:
+
+```csharp
+var listener = new MonitoringFailureListener(metricsService);
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Fallible(
+        wt => wt.Http("https://primary.api"),
+        listener)
+    .CreateLogger();
+```
+
+## Error Handling in Sinks
+
+Sinks should handle errors gracefully to prevent application crashes.
+
+### Safe Sink Implementation
+
+```csharp
+public class SafeSink : ILogEventSink, ISetLoggingFailureListener
+{
+    ILoggingFailureListener _failureListener = SelfLog.FailureListener;
+
+    public void SetFailureListener(ILoggingFailureListener listener)
+    {
+        _failureListener = listener;
+    }
+
+    public void Emit(LogEvent logEvent)
+    {
+        try
+        {
+            // Attempt to write the event
+            WriteToDestination(logEvent);
+        }
+        catch (Exception ex)
+        {
+            // Report the failure
+            _failureListener.OnLoggingFailed(
+                this,
+                LoggingFailureKind.Temporary,
+                "Failed to emit log event",
+                new[] { logEvent },
+                ex);
+        }
+    }
+}
+```
+
+<Warning>
+Never let exceptions escape from `Emit()`. Always catch and report them through `ILoggingFailureListener`.
+</Warning>
+
+### Batched Sink Error Handling
+
+The `BatchingSink` handles failures automatically:
+
+```csharp
+public class MyBatchedSink : IBatchedLogEventSink
+{
+    public async Task EmitBatchAsync(IEnumerable<LogEvent> events)
+    {
+        // Exceptions thrown here are caught by BatchingSink
+        // and reported through its failure listener
+        await SendToRemoteServiceAsync(events);
+    }
+
+    public Task OnEmptyBatchAsync()
+    {
+        return Task.CompletedTask;
+    }
+}
+```
+
+The `BatchingSink` automatically:
+- Catches exceptions from `EmitBatchAsync()`
+- Reports failures through `ILoggingFailureListener`
+- Implements exponential backoff for retries
+- Drops events when `RetryTimeLimit` is exceeded
+
+## Common Error Scenarios
+
+### Configuration Errors
+
+```csharp
+SelfLog.Enable(Console.Error);
+
+try
+{
+    Log.Logger = new LoggerConfiguration()
+        .WriteTo.File("/invalid/path/log.txt")
+        .CreateLogger();
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Failed to configure logger: {ex.Message}");
+    // Create fallback logger
+    Log.Logger = new LoggerConfiguration()
+        .WriteTo.Console()
+        .CreateLogger();
+}
+```
+
+### Network Sink Failures
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.FallbackChain(
+        wt => wt.Http("https://primary.api"),
+        wt => wt.Http("https://backup.api"),
+        wt => wt.File("fallback-log.txt"))
+    .CreateLogger();
+```
+
+<Tip>
+Use fallback chains to ensure critical logs are never lost, even when primary sinks fail.
+</Tip>
+
+### Sink Disposal Errors
+
+```csharp
+public class DisposableSink : ILogEventSink, IDisposable
+{
+    readonly HttpClient _client = new();
+
+    public void Emit(LogEvent logEvent)
+    {
+        // Implementation
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            _client?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            SelfLog.WriteLine("Error disposing sink: {0}", ex);
+        }
+    }
+}
+```
+
+## Safe Aggregate Sink
+
+Serilog includes `SafeAggregateSink` which catches and logs exceptions from wrapped sinks:
+
+```csharp
+public class SafeAggregateSink : ILogEventSink
+{
+    readonly ILogEventSink[] _sinks;
+
+    public void Emit(LogEvent logEvent)
+    {
+        foreach (var sink in _sinks)
+        {
+            try
+            {
+                sink.Emit(logEvent);
+            }
+            catch (Exception ex)
+            {
+                SelfLog.WriteLine("Caught exception while emitting to sink {0}: {1}",
+                    sink.GetType().Name, ex);
+            }
+        }
+    }
+}
+```
+
+<Note>
+Serilog uses safe wrappers internally to ensure one failing sink doesn't prevent others from receiving events.
+</Note>
+
+## Monitoring Logging Health
+
+Track logging failures with metrics:
+
+```csharp
+public class MetricsFailureListener : ILoggingFailureListener
+{
+    readonly IMeter _meter;
+    readonly Counter<long> _failureCounter;
+
+    public MetricsFailureListener(IMeterFactory meterFactory)
+    {
+        _meter = meterFactory.Create("Serilog");
+        _failureCounter = _meter.CreateCounter<long>(
+            "logging_failures",
+            description: "Number of logging failures");
+    }
+
+    public void OnLoggingFailed(
+        object sender,
+        LoggingFailureKind kind,
+        string message,
+        IReadOnlyCollection<LogEvent>? events,
+        Exception? exception)
+    {
+        _failureCounter.Add(1, new KeyValuePair<string, object?>[]
+        {
+            new("sink", sender.GetType().Name),
+            new("kind", kind.ToString()),
+            new("event_count", events?.Count ?? 0)
+        });
+    }
+}
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Enable SelfLog early">
+Enable SelfLog before configuring your logger to capture all initialization errors.
+</Step>
+
+<Step title="Use fallback chains for critical logs">
+Ensure important logs reach at least one destination by configuring fallback sinks.
+</Step>
+
+<Step title="Monitor logging failures">
+Implement `ILoggingFailureListener` to track and alert on logging failures in production.
+</Step>
+
+<Step title="Never throw from Emit()">
+Catch all exceptions in custom sinks and report them through failure listeners.
+</Step>
+
+<Step title="Test failure scenarios">
+Test your sinks with network failures, disk full conditions, and other error scenarios.
+</Step>
+
+</Steps>
+
+## Debugging Tips
+
+### Enable verbose SelfLog
+
+```csharp
+SelfLog.Enable(msg =>
+{
+    Console.WriteLine($"[SERILOG] {msg}");
+    File.AppendAllText("serilog-debug.txt", msg + Environment.NewLine);
+});
+```
+
+### Capture stack traces
+
+```csharp
+public class DetailedFailureListener : ILoggingFailureListener
+{
+    public void OnLoggingFailed(
+        object sender,
+        LoggingFailureKind kind,
+        string message,
+        IReadOnlyCollection<LogEvent>? events,
+        Exception? exception)
+    {
+        var details = new
+        {
+            Timestamp = DateTimeOffset.UtcNow,
+            Sink = sender.GetType().FullName,
+            Kind = kind,
+            Message = message,
+            EventCount = events?.Count,
+            Exception = exception?.ToString(),
+            StackTrace = Environment.StackTrace
+        };
+
+        File.AppendAllText(
+            "logging-failures.json",
+            JsonSerializer.Serialize(details) + Environment.NewLine);
+    }
+}
+```
+
+### Test with failing sinks
+
+```csharp
+public class ThrowingSink : ILogEventSink
+{
+    readonly Exception _exception;
+
+    public ThrowingSink(Exception exception)
+    {
+        _exception = exception;
+    }
+
+    public void Emit(LogEvent logEvent)
+    {
+        throw _exception;
+    }
+}
+
+// Test error handling
+SelfLog.Enable(Console.Error);
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Sink(new ThrowingSink(new IOException("Disk full")))
+    .WriteTo.Console() // Should still work
+    .CreateLogger();
+
+Log.Information("Test");
+```
+
+<Warning>
+In production, logging failures should be rare. Frequent failures indicate infrastructure problems that need attention.
+</Warning>

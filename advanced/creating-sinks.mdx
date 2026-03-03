@@ -1,0 +1,202 @@
+---
+title: Creating Custom Sinks
+description: Learn how to implement custom sinks by implementing the ILogEventSink interface to send log events to any destination
+---
+
+Custom sinks allow you to send Serilog log events to any destination. Sinks are the final stage of the logging pipeline and receive fully-processed log events.
+
+## The ILogEventSink Interface
+
+All sinks implement the `ILogEventSink` interface, which defines a single method:
+
+```csharp
+public interface ILogEventSink
+{
+    /// <summary>
+    /// Emit the provided log event to the sink.
+    /// </summary>
+    /// <param name="logEvent">The log event to write.</param>
+    void Emit(LogEvent logEvent);
+}
+```
+
+<Note>
+Implementers should allow exceptions to propagate when event emission fails. The logger will handle exceptions and produce diagnostics appropriately.
+</Note>
+
+## Basic Sink Implementation
+
+Here's a simple example that writes to the console:
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System;
+
+public class ConsoleSink : ILogEventSink
+{
+    private readonly IFormatProvider _formatProvider;
+
+    public ConsoleSink(IFormatProvider formatProvider = null)
+    {
+        _formatProvider = formatProvider;
+    }
+
+    public void Emit(LogEvent logEvent)
+    {
+        var message = logEvent.RenderMessage(_formatProvider);
+        Console.WriteLine($"[{logEvent.Timestamp:HH:mm:ss} {logEvent.Level}] {message}");
+
+        if (logEvent.Exception != null)
+        {
+            Console.WriteLine(logEvent.Exception);
+        }
+    }
+}
+```
+
+## Thread-Safe Sink Implementation
+
+For sinks that write to shared resources, ensure thread safety:
+
+```csharp
+public class FileSink : ILogEventSink, IDisposable
+{
+    private readonly TextWriter _output;
+    private readonly object _syncRoot = new object();
+
+    public FileSink(string path)
+    {
+        _output = File.CreateText(path);
+    }
+
+    public void Emit(LogEvent logEvent)
+    {
+        lock (_syncRoot)
+        {
+            _output.WriteLine(logEvent.RenderMessage());
+            _output.Flush();
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_syncRoot)
+        {
+            _output?.Dispose();
+        }
+    }
+}
+```
+
+<Warning>
+Sinks are called synchronously from the logging pipeline. Long-running operations will block logging. Consider using batched sinks for I/O-intensive operations.
+</Warning>
+
+## Configuration Extension Methods
+
+Create extension methods to enable fluent configuration:
+
+```csharp
+using Serilog;
+using Serilog.Configuration;
+using Serilog.Events;
+
+public static class ConsoleSinkExtensions
+{
+    public static LoggerConfiguration Console(
+        this LoggerSinkConfiguration sinkConfiguration,
+        LogEventLevel restrictedToMinimumLevel = LogEventLevel.Verbose,
+        IFormatProvider formatProvider = null)
+    {
+        return sinkConfiguration.Sink(
+            new ConsoleSink(formatProvider),
+            restrictedToMinimumLevel);
+    }
+}
+```
+
+Usage:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Working with LogEvent Properties
+
+Access structured data from log events:
+
+```csharp
+public void Emit(LogEvent logEvent)
+{
+    // Access specific properties
+    if (logEvent.Properties.TryGetValue("UserId", out var userIdValue))
+    {
+        // Property values are LogEventPropertyValue instances
+        var userId = userIdValue.ToString();
+    }
+
+    // Iterate all properties
+    foreach (var property in logEvent.Properties)
+    {
+        Console.WriteLine($"{property.Key}: {property.Value}");
+    }
+
+    // Access message template
+    var template = logEvent.MessageTemplate.Text;
+
+    // Access timestamp
+    var timestamp = logEvent.Timestamp;
+
+    // Access level
+    var level = logEvent.Level;
+}
+```
+
+## Null Sink Example
+
+A minimal sink implementation for testing or discarding events:
+
+```csharp
+public class NullSink : ILogEventSink
+{
+    public void Emit(LogEvent logEvent)
+    {
+        // Do nothing - discard the event
+    }
+}
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Handle exceptions appropriately">
+Let exceptions propagate - Serilog's infrastructure will handle them and provide diagnostics.
+</Step>
+
+<Step title="Implement IDisposable when needed">
+If your sink allocates resources (files, network connections, etc.), implement `IDisposable` to clean them up.
+</Step>
+
+<Step title="Consider buffering for performance">
+For high-throughput scenarios, use [batched sinks](/advanced/batching) instead of writing each event individually.
+</Step>
+
+<Step title="Validate configuration early">
+Throw exceptions from constructors when configuration is invalid, not from the `Emit` method.
+</Step>
+
+<Step title="Use minimal locking">
+Only lock when accessing shared mutable state. Keep critical sections as short as possible.
+</Step>
+
+</Steps>
+
+## Next Steps
+
+- Learn about [batched sink implementation](/advanced/batching) for better performance
+- Explore [creating custom enrichers](/advanced/creating-enrichers)
+- Understand [logger lifecycle and disposal](/advanced/lifecycle)

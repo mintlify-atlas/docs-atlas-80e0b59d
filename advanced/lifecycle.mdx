@@ -1,0 +1,446 @@
+---
+title: Logger Lifecycle and Disposal
+description: Understand logger creation, configuration, disposal, and proper cleanup to ensure log events are flushed and resources are released
+---
+
+Proper logger lifecycle management ensures that all buffered log events are flushed and resources are properly released. Understanding the lifecycle is critical for reliable logging in production applications.
+
+## Logger Creation
+
+Loggers are created using `LoggerConfiguration`:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.File("logs/app.log")
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+The `CreateLogger()` method builds the logging pipeline:
+
+```csharp
+public class LoggerConfiguration
+{
+    private readonly List<ILogEventSink> _logEventSinks = [];
+    private readonly List<ILogEventEnricher> _enrichers = [];
+    private readonly List<ILogEventFilter> _filters = [];
+    private LogEventLevel _minimumLevel = LogEventLevel.Information;
+
+    public Logger CreateLogger()
+    {
+        // Validates configuration and builds the pipeline
+        var sink = BuildSink();
+        var enricher = BuildEnricher();
+        
+        return new Logger(
+            messageTemplateProcessor,
+            minimumLevel,
+            levelSwitch,
+            sink,
+            enricher,
+            dispose,
+            disposeAsync,
+            overrideMap);
+    }
+}
+```
+
+## The Logger Class
+
+`Logger` implements `ILogger`, `ILogEventSink`, and `IDisposable`:
+
+```csharp
+public sealed class Logger : ILogger, ILogEventSink, IDisposable
+#if FEATURE_ASYNCDISPOSABLE
+    , IAsyncDisposable
+#endif
+{
+    private readonly ILogEventSink _sink;
+    private readonly Action? _dispose;
+    private readonly Func<ValueTask>? _disposeAsync;
+    private readonly ILogEventEnricher _enricher;
+    private readonly LogEventLevel _minimumLevel;
+
+    public void Dispose()
+    {
+        _dispose?.Invoke();
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        return _disposeAsync?.Invoke() ?? default;
+    }
+}
+```
+
+<Note>
+The `Logger` must be disposed to flush buffered events and release resources like file handles and network connections.
+</Note>
+
+## Synchronous Disposal
+
+Dispose the logger when your application shuts down:
+
+```csharp
+using var logger = new LoggerConfiguration()
+    .WriteTo.File("logs/app.log")
+    .CreateLogger();
+
+logger.Information("Application starting");
+
+// Logger is automatically disposed when it goes out of scope
+```
+
+Or explicitly:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.File("logs/app.log")
+    .CreateLogger();
+
+try
+{
+    logger.Information("Application starting");
+    // Application logic
+}
+finally
+{
+    logger.Dispose();
+}
+```
+
+## Async Disposal
+
+For async cleanup (requires .NET Core 3.0+):
+
+```csharp
+await using var logger = new LoggerConfiguration()
+    .WriteTo.File("logs/app.log")
+    .CreateLogger();
+
+logger.Information("Application starting");
+
+// Logger is automatically disposed asynchronously
+```
+
+Or explicitly:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.File("logs/app.log")
+    .CreateLogger();
+
+try
+{
+    logger.Information("Application starting");
+}
+finally
+{
+    await logger.DisposeAsync();
+}
+```
+
+<Warning>
+Async disposal is important for batched sinks to ensure all buffered events are flushed.
+</Warning>
+
+## Global Logger Pattern
+
+The static `Log` class provides a global logger:
+
+```csharp
+using Serilog;
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+try
+{
+    Log.Information("Application starting");
+    // Application logic
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Application failed to start");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
+```
+
+<Steps>
+
+<Step title="Set Log.Logger early">
+Assign the logger as early as possible in your application startup.
+</Step>
+
+<Step title="Use Log.CloseAndFlush()">
+Always call this in a finally block to ensure events are flushed.
+</Step>
+
+<Step title="Await CloseAndFlushAsync() for batched sinks">
+Use `await Log.CloseAndFlushAsync()` when using async sinks.
+</Step>
+
+</Steps>
+
+## ASP.NET Core Integration
+
+In ASP.NET Core, integrate Serilog with the host lifetime:
+
+```csharp
+using Serilog;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((context, configuration) =>
+{
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .Enrich.FromLogContext()
+        .WriteTo.Console();
+});
+
+var app = builder.Build();
+
+try
+{
+    Log.Information("Starting web application");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Application terminated unexpectedly");
+}
+finally
+{
+    await Log.CloseAndFlushAsync();
+}
+```
+
+<Note>
+The host automatically disposes the logger when the application shuts down gracefully. The finally block ensures cleanup even during abnormal termination.
+</Note>
+
+## Batched Sink Disposal
+
+Batched sinks like `BatchingSink` require special disposal handling:
+
+```csharp
+sealed class BatchingSink : ILogEventSink, IDisposable, IAsyncDisposable
+{
+    private readonly CancellationTokenSource _shutdownSignal = new();
+    private readonly Task _runLoop;
+
+    public void Dispose()
+    {
+        SignalShutdown();
+        
+        try
+        {
+            _runLoop.Wait();
+        }
+        catch (Exception ex)
+        {
+            // Log disposal failures
+        }
+
+        (_targetSink as IDisposable)?.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        SignalShutdown();
+        
+        try
+        {
+            await _runLoop.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Log disposal failures
+        }
+
+        if (_targetSink is IAsyncDisposable asyncDisposable)
+            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+        else
+            (_targetSink as IDisposable)?.Dispose();
+    }
+
+    private void SignalShutdown()
+    {
+        lock (_stateLock)
+        {
+            if (!_shutdownSignal.IsCancellationRequested)
+            {
+                _queue.Writer.Complete();
+                _shutdownSignal.Cancel();
+            }
+        }
+    }
+}
+```
+
+<Steps>
+
+<Step title="Signal shutdown">
+Complete the queue and cancel ongoing operations.
+</Step>
+
+<Step title="Wait for the flush loop">
+Wait for the background task to finish processing buffered events.
+</Step>
+
+<Step title="Dispose the target sink">
+Clean up the underlying sink that processes batches.
+</Step>
+
+</Steps>
+
+## Contextual Loggers
+
+Contextual loggers share the root logger's lifecycle:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+var contextLogger = logger.ForContext("RequestId", "12345");
+
+contextLogger.Information("Processing request");
+
+// Only dispose the root logger
+logger.Dispose();
+```
+
+<Note>
+Contextual loggers created with `ForContext` don't need separate disposal. They're lightweight wrappers around the root logger.
+</Note>
+
+## Dependency Injection Lifetime
+
+When using dependency injection, logger lifetime depends on registration:
+
+```csharp
+// Singleton - one instance for the application
+services.AddSingleton<ILogger>(Log.Logger);
+
+// Don't register as Scoped or Transient - loggers are thread-safe
+// and should be shared across the application
+```
+
+## Cleanup Timeout
+
+Set a timeout for disposal to prevent hanging:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.File("logs/app.log")
+    .CreateLogger();
+
+try
+{
+    logger.Information("Application running");
+}
+finally
+{
+    var disposeTask = logger.DisposeAsync().AsTask();
+    var completed = await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(10)));
+    
+    if (completed != disposeTask)
+    {
+        Console.Error.WriteLine("Logger disposal timed out");
+    }
+}
+```
+
+## Silent Logger
+
+Serilog provides a no-op logger for testing:
+
+```csharp
+public static ILogger None { get; } = new SilentLogger();
+```
+
+Usage:
+
+```csharp
+var logger = Logger.None;
+logger.Information("This is ignored"); // No-op
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Always dispose loggers">
+Use `using` statements or try-finally blocks to ensure disposal.
+</Step>
+
+<Step title="Prefer async disposal for batched sinks">
+Use `DisposeAsync()` when working with batched or async sinks.
+</Step>
+
+<Step title="Call Log.CloseAndFlush() in finally blocks">
+Ensure this is called even when exceptions occur during shutdown.
+</Step>
+
+<Step title="Don't dispose contextual loggers">
+Only dispose the root logger; contextual loggers are lightweight wrappers.
+</Step>
+
+<Step title="Register as singleton in DI">
+Loggers are thread-safe and should be shared across the application.
+</Step>
+
+<Step title="Set disposal timeouts">
+Prevent hanging during shutdown with reasonable timeouts.
+</Step>
+
+<Step title="Test disposal in integration tests">
+Verify that all events are flushed before the application terminates.
+</Step>
+
+</Steps>
+
+## Troubleshooting
+
+### Missing Log Events
+
+If log events are missing, the logger may not have been disposed:
+
+```csharp
+// Bad - logger never disposed
+var logger = new LoggerConfiguration().WriteTo.File("log.txt").CreateLogger();
+logger.Information("Event");
+// Application exits - event might not be written
+
+// Good - logger properly disposed
+using var logger = new LoggerConfiguration().WriteTo.File("log.txt").CreateLogger();
+logger.Information("Event");
+// Logger flushed on disposal
+```
+
+### AppDomain Unload
+
+Register disposal with `AppDomain.CurrentDomain.ProcessExit`:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.File("log.txt")
+    .CreateLogger();
+
+AppDomain.CurrentDomain.ProcessExit += (sender, args) =>
+{
+    Log.CloseAndFlush();
+};
+```
+
+## Next Steps
+
+- Learn about [creating custom sinks](/advanced/creating-sinks)
+- Explore [batched sink implementation](/advanced/batching)
+- Understand [creating custom enrichers](/advanced/creating-enrichers)

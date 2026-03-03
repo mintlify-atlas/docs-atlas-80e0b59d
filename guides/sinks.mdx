@@ -1,0 +1,293 @@
+---
+title: "Sinks Guide"
+description: "Understanding Serilog sinks and the sink ecosystem"
+---
+
+Sinks are the output destinations for your log events. Serilog's flexible architecture allows you to write logs to multiple destinations simultaneously, from simple console output to sophisticated cloud services.
+
+## Core Concepts
+
+A sink implements the `ILogEventSink` interface, which has a single method:
+
+```csharp
+void Emit(LogEvent logEvent);
+```
+
+Serilog buffers and routes events to sinks based on your configuration, handling filtering, enrichment, and batching as needed.
+
+## Built-in Sinks
+
+Serilog's core library includes several internal sinks that form the foundation of the logging pipeline:
+
+### RestrictedSink
+
+Applies minimum level filtering to events before passing them to a wrapped sink:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console(restrictedToMinimumLevel: LogEventLevel.Warning)
+    .CreateLogger();
+```
+
+### FilteringSink
+
+Provides advanced filtering using predicates for fine-grained control over which events reach a sink.
+
+### AggregateSink
+
+Combines multiple sinks into one, allowing you to write to multiple destinations:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.File("log.txt")
+    .CreateLogger();
+```
+
+<Note>
+Each `WriteTo` call adds a sink to an internal `AggregateSink` that fans out events to all configured destinations.
+</Note>
+
+## Batching Sinks
+
+For high-performance scenarios, Serilog provides built-in batching support through `IBatchedLogEventSink`:
+
+```csharp
+public class MyBatchedSink : IBatchedLogEventSink
+{
+    public async Task EmitBatchAsync(IEnumerable<LogEvent> events)
+    {
+        // Process events in batch
+        await SendToRemoteServiceAsync(events);
+    }
+
+    public Task OnEmptyBatchAsync()
+    {
+        // Called when no events were buffered
+        return Task.CompletedTask;
+    }
+}
+
+// Configuration
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Sink(
+        new MyBatchedSink(),
+        new BatchingOptions
+        {
+            BatchSizeLimit = 100,
+            BufferingTimeLimit = TimeSpan.FromSeconds(2),
+            QueueLimit = 10000
+        })
+    .CreateLogger();
+```
+
+### Batching Options
+
+<CodeGroup>
+
+```csharp BatchSizeLimit
+// Maximum events per batch (default: 1000)
+BatchSizeLimit = 100
+```
+
+```csharp BufferingTimeLimit
+// Maximum time before flushing (default: 2 seconds)
+BufferingTimeLimit = TimeSpan.FromSeconds(5)
+```
+
+```csharp QueueLimit
+// Internal queue size (default: 100000, null for unbounded)
+QueueLimit = 50000
+```
+
+```csharp EagerlyEmitFirstEvent
+// Immediately emit first event (default: true)
+EagerlyEmitFirstEvent = true
+```
+
+</CodeGroup>
+
+<Tip>
+Batching reduces I/O overhead and network calls, making it ideal for high-throughput applications and remote sinks.
+</Tip>
+
+## Conditional Sinks
+
+Route events to sinks based on runtime conditions:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Conditional(
+        evt => evt.Level >= LogEventLevel.Error,
+        wt => wt.File("errors.txt"))
+    .CreateLogger();
+```
+
+## Fallback Chains
+
+Create resilient logging with automatic failover:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.FallbackChain(
+        wt => wt.Http("https://primary.api"),
+        wt => wt.Http("https://backup.api"),
+        wt => wt.File("fallback.txt"))
+    .CreateLogger();
+```
+
+<Warning>
+Fallback chains require sinks to either throw exceptions on failure or implement `ISetLoggingFailureListener`.
+</Warning>
+
+## Sub-loggers
+
+Create isolated logging pipelines within your main logger:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.Logger(lc => lc
+        .Filter.ByIncludingOnly(evt => evt.Level >= LogEventLevel.Error)
+        .WriteTo.File("errors.txt"))
+    .CreateLogger();
+```
+
+<Note>
+Sub-loggers inherit enrichers and filters from the parent but can apply additional filtering. They cannot log at a more verbose level than the parent.
+</Note>
+
+## Popular Third-Party Sinks
+
+The Serilog ecosystem includes hundreds of community-maintained sinks:
+
+### File-based
+- **Serilog.Sinks.File** - Rolling file output
+- **Serilog.Sinks.Async** - Asynchronous wrapper for any sink
+
+### Console & Debug
+- **Serilog.Sinks.Console** - Formatted console output
+- **Serilog.Sinks.Debug** - Output to debugger
+
+### Databases
+- **Serilog.Sinks.MSSqlServer** - Microsoft SQL Server
+- **Serilog.Sinks.PostgreSQL** - PostgreSQL
+- **Serilog.Sinks.MongoDB** - MongoDB
+
+### Cloud Services
+- **Serilog.Sinks.Seq** - Seq structured log server
+- **Serilog.Sinks.Elasticsearch** - Elasticsearch
+- **Serilog.Sinks.ApplicationInsights** - Azure Application Insights
+- **Serilog.Sinks.Datadog** - Datadog
+
+### Monitoring & Alerting
+- **Serilog.Sinks.Slack** - Slack notifications
+- **Serilog.Sinks.Email** - Email alerts
+
+<Tip>
+Find more sinks on [NuGet](https://www.nuget.org/packages?q=serilog.sinks) or the [Serilog wiki](https://github.com/serilog/serilog/wiki/Provided-Sinks).
+</Tip>
+
+## Creating Custom Sinks
+
+### Simple Sink
+
+```csharp
+public class CustomSink : ILogEventSink
+{
+    readonly ITextFormatter _formatter;
+
+    public CustomSink(ITextFormatter formatter)
+    {
+        _formatter = formatter;
+    }
+
+    public void Emit(LogEvent logEvent)
+    {
+        using var writer = new StringWriter();
+        _formatter.Format(logEvent, writer);
+        
+        // Send to your destination
+        SendToDestination(writer.ToString());
+    }
+}
+```
+
+### Disposable Sink
+
+```csharp
+public class DisposableSink : ILogEventSink, IDisposable
+{
+    readonly HttpClient _httpClient = new();
+
+    public void Emit(LogEvent logEvent)
+    {
+        // Implementation
+    }
+
+    public void Dispose()
+    {
+        _httpClient?.Dispose();
+    }
+}
+```
+
+<Note>
+Serilog automatically disposes sinks that implement `IDisposable` or `IAsyncDisposable` when the logger is disposed.
+</Note>
+
+## Sink Configuration Extensions
+
+Create fluent configuration extensions for your sinks:
+
+```csharp
+public static class CustomSinkExtensions
+{
+    public static LoggerConfiguration CustomSink(
+        this LoggerSinkConfiguration sinkConfiguration,
+        string endpoint,
+        LogEventLevel restrictedToMinimumLevel = LogEventLevel.Verbose)
+    {
+        var sink = new CustomSink(endpoint);
+        return sinkConfiguration.Sink(sink, restrictedToMinimumLevel);
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.CustomSink("https://api.example.com")
+    .CreateLogger();
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Choose appropriate batching">
+Use batching for network-based sinks to reduce overhead. For local file sinks, batching may not provide significant benefits.
+</Step>
+
+<Step title="Configure queue limits">
+Set `QueueLimit` in `BatchingOptions` to prevent memory issues under extreme load. When the limit is reached, events are discarded.
+</Step>
+
+<Step title="Handle failures gracefully">
+Implement `ISetLoggingFailureListener` in sinks that can fail temporarily. Use fallback chains for critical logging.
+</Step>
+
+<Step title="Use sub-loggers for isolation">
+Route different log levels or categories to different sinks using sub-loggers rather than multiple logger instances.
+</Step>
+
+</Steps>
+
+## Performance Considerations
+
+- **Minimize allocations** - Reuse formatters and buffers where possible
+- **Use async appropriately** - `IBatchedLogEventSink` is async-first for natural async I/O
+- **Avoid blocking** - Never block in `Emit()` for synchronous sinks; use batching instead
+- **Test under load** - Verify sink behavior with `QueueLimit` and high event rates
+
+<Tip>
+For the best performance in high-throughput scenarios, combine `BatchingSink` with an appropriate `QueueLimit` and use async sinks.
+</Tip>

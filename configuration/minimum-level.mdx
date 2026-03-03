@@ -1,0 +1,274 @@
+---
+title: "Setting Minimum Log Levels"
+description: "Configure minimum log levels and level overrides using LoggerMinimumLevelConfiguration"
+---
+
+The `MinimumLevel` property on `LoggerConfiguration` controls which log events are passed to sinks. By default, only events at `Information` level and above are processed.
+
+## Setting the Minimum Level
+
+### Using Is Method
+
+Set the minimum level explicitly:
+
+```csharp src/Serilog/Configuration/LoggerMinimumLevelConfiguration.cs
+public LoggerConfiguration Is(LogEventLevel minimumLevel)
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Is(LogEventLevel.Debug)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Using Convenience Methods
+
+`LoggerMinimumLevelConfiguration` provides convenience methods for each log level:
+
+<CodeGroup>
+```csharp Verbose
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Verbose()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+```csharp Debug
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+```csharp Information
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+```csharp Warning
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Warning()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+```csharp Error
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Error()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+```csharp Fatal
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Fatal()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+</CodeGroup>
+
+## Log Level Descriptions
+
+From the source code:
+
+| Level | Description | Source |
+|-------|-------------|--------|
+| **Verbose** | Anything and everything you might want to know about a running block of code | `LoggerMinimumLevelConfiguration.cs:63-64` |
+| **Debug** | Internal system events that aren't necessarily observable from the outside | `LoggerMinimumLevelConfiguration.cs:69-71` |
+| **Information** | The lifeblood of operational intelligence - things happen | `LoggerMinimumLevelConfiguration.cs:76-78` |
+| **Warning** | Service is degraded or endangered | `LoggerMinimumLevelConfiguration.cs:83-84` |
+| **Error** | Functionality is unavailable, invariants are broken or data is lost | `LoggerMinimumLevelConfiguration.cs:89-91` |
+| **Fatal** | If you have a pager, it goes off when one of these occurs | `LoggerMinimumLevelConfiguration.cs:96-98` |
+
+## Dynamic Level Switching
+
+Use a `LoggingLevelSwitch` to change the minimum level at runtime:
+
+```csharp src/Serilog/Configuration/LoggerMinimumLevelConfiguration.cs
+public LoggerConfiguration ControlledBy(LoggingLevelSwitch levelSwitch)
+```
+
+**Example:**
+
+<Steps>
+  <Step title="Create a level switch">
+    ```csharp
+    var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+    ```
+  </Step>
+
+  <Step title="Configure logger with switch">
+    ```csharp
+    var logger = new LoggerConfiguration()
+        .MinimumLevel.ControlledBy(levelSwitch)
+        .WriteTo.Console()
+        .CreateLogger();
+    ```
+  </Step>
+
+  <Step title="Change level dynamically">
+    ```csharp
+    logger.Information("This will be logged");
+    logger.Debug("This will not be logged");
+
+    // Change the level at runtime
+    levelSwitch.MinimumLevel = LogEventLevel.Debug;
+
+    logger.Debug("Now this will be logged!");
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Level switches are particularly useful for:
+- Enabling debug logging in production without redeployment
+- Integrating with remote configuration systems
+- Responding to application health conditions
+</Note>
+
+## Level Overrides
+
+Override the minimum level for specific namespaces or type names:
+
+```csharp src/Serilog/Configuration/LoggerMinimumLevelConfiguration.cs
+public LoggerConfiguration Override(string source, LogEventLevel minimumLevel)
+
+public LoggerConfiguration Override(string source, LoggingLevelSwitch levelSwitch)
+```
+
+### Static Override
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+With this configuration:
+- Events from `Microsoft.*` namespaces require `Warning` level or higher
+- Events from `System.*` namespaces require `Warning` level or higher  
+- All other events require `Debug` level or higher
+
+### Dynamic Override with Level Switch
+
+```csharp
+var microsoftSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
+var systemSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft", microsoftSwitch)
+    .MinimumLevel.Override("System", systemSwitch)
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Later, enable verbose Microsoft logging
+microsoftSwitch.MinimumLevel = LogEventLevel.Verbose;
+```
+
+### Partial Namespace Matching
+
+Overrides match partial namespaces:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+This affects:
+- `Microsoft.AspNetCore.Hosting.*`
+- `Microsoft.AspNetCore.Routing.*`
+- Any namespace starting with `Microsoft.AspNetCore`
+
+## Turning Off Logging
+
+Use `LevelAlias.Off` to disable all logging:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Is(LevelAlias.Off)
+    .WriteTo.Console()
+    .CreateLogger();
+
+logger.Fatal("This will not be logged");
+```
+
+### Selective Disabling
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Noisy.Namespace", LevelAlias.Off)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Combining with Sink-Level Restrictions
+
+Minimum level configuration works with sink-level restrictions:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Verbose()  // Allow all events through
+    .WriteTo.Console(LogEventLevel.Information)  // Console only sees Information+
+    .WriteTo.File("debug.txt", LogEventLevel.Debug)  // File sees Debug+
+    .CreateLogger();
+```
+
+<Note>
+Events must pass BOTH the global minimum level AND the sink-specific level to be written.
+</Note>
+
+## Common Patterns
+
+### Development vs Production
+
+```csharp
+var isProduction = Environment.GetEnvironmentVariable("ENVIRONMENT") == "Production";
+
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Is(isProduction ? LogEventLevel.Information : LogEventLevel.Debug)
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Framework Noise Reduction
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
+    .MinimumLevel.Override("System.Net.Http", LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Configuration Precedence
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Verbose()  
+    .MinimumLevel.Warning()  // This wins - last configuration takes precedence
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+<Warning>
+**Sub-Logger Restrictions:**
+- Level overrides are NOT supported on sub-loggers
+- Use `Filter` or `Conditional` instead for sub-logger level control
+- Consider using [serilog-filters-expressions](https://github.com/serilog/serilog-filters-expressions) for advanced filtering
+</Warning>

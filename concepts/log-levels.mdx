@@ -1,0 +1,375 @@
+---
+title: Log Levels
+description: Understanding Serilog's log levels and when to use each severity level
+---
+
+Log levels (also called severity levels) indicate the importance and urgency of log events. Serilog provides six log levels, defined in the `LogEventLevel` enum, each serving a specific purpose in application diagnostics and monitoring.
+
+## The Six Log Levels
+
+From the source code (`Events/LogEventLevel.cs:20-56`), Serilog defines these levels in order of increasing severity:
+
+```csharp
+public enum LogEventLevel
+{
+    Verbose,      // Most detailed
+    Debug,
+    Information,
+    Warning,
+    Error,
+    Fatal         // Most severe
+}
+```
+
+## When to Use Each Level
+
+### Verbose
+
+<Note>
+**Definition**: "Anything and everything you might want to know about a running block of code."
+</Note>
+
+Use for extremely detailed tracing and diagnostic information, typically only needed when investigating specific issues.
+
+```csharp
+Log.Verbose("Entering method ProcessOrder with parameters {@OrderRequest}", request);
+Log.Verbose("Cache lookup for key {CacheKey} returned {Result}", key, result);
+Log.Verbose("Iteration {Iteration} of {TotalIterations} processing {ItemId}", 
+    i, total, item.Id);
+```
+
+**When to use:**
+- Detailed method entry/exit points
+- Loop iterations and internal state changes
+- Fine-grained performance measurements
+- Development and troubleshooting
+
+**Note:** Verbose events are typically disabled in production due to volume and performance impact.
+
+### Debug
+
+<Note>
+**Definition**: "Internal system events that aren't necessarily observable from the outside."
+</Note>
+
+Use for internal system events useful during development and debugging.
+
+```csharp
+Log.Debug("Loading configuration from {ConfigPath}", configPath);
+Log.Debug("Cache miss for key {Key}, fetching from database", key);
+Log.Debug("Resolved dependency {ServiceType} to implementation {ImplementationType}",
+    typeof(IService), typeof(ServiceImpl));
+```
+
+**When to use:**
+- Configuration loading and validation
+- Caching operations (hits, misses, evictions)
+- Dependency resolution
+- Internal state transitions
+- Algorithm checkpoints
+
+**Note:** Debug events may be enabled in development/staging environments but are often disabled in production.
+
+### Information
+
+<Note>
+**Definition**: "The lifeblood of operational intelligence - things happen."
+</Note>
+
+Use to record normal, significant events in the application flow that demonstrate the system is working correctly.
+
+```csharp
+Log.Information("User {UserName} logged in from {IpAddress}", userName, ipAddress);
+Log.Information("Order {OrderId} created with total {Amount:C}", orderId, total);
+Log.Information("Background job {JobName} started at {StartTime}", jobName, startTime);
+Log.Information("Email sent to {RecipientEmail} with subject {Subject}", 
+    email, subject);
+```
+
+**When to use:**
+- User actions and business events
+- Service lifecycle events (startup, shutdown)
+- Significant operations completing successfully
+- Background job execution
+- External service interactions
+
+**Note:** Information is typically the default minimum level in production. These events tell the story of what your application is doing.
+
+### Warning
+
+<Note>
+**Definition**: "Service is degraded or endangered."
+</Note>
+
+Use when something unexpected happened, but the application can continue working. Warnings indicate potential problems that should be investigated.
+
+```csharp
+Log.Warning("Request to {Url} took {ElapsedMs}ms, exceeding threshold of {ThresholdMs}ms",
+    url, elapsed, threshold);
+Log.Warning("Failed to send email to {Email}, will retry. Attempt {Attempt} of {MaxAttempts}",
+    email, attempt, maxAttempts);
+Log.Warning("API rate limit at {Percentage:P0}, throttling enabled", 
+    currentRate / maxRate);
+Log.Warning("Deprecated API version {Version} used by client {ClientId}",
+    apiVersion, clientId);
+```
+
+**When to use:**
+- Performance degradation (slow queries, timeouts approaching)
+- Recoverable errors (retries, fallbacks)
+- Deprecated feature usage
+- Approaching resource limits
+- Unexpected but handled conditions
+- Data quality issues
+
+**Note:** Warnings should be monitored and investigated, but don't require immediate action.
+
+### Error
+
+<Note>
+**Definition**: "Functionality is unavailable, invariants are broken or data is lost."
+</Note>
+
+Use when an operation fails and cannot be completed, but the application continues running.
+
+```csharp
+Log.Error("Failed to process order {OrderId}: {ErrorMessage}", 
+    orderId, ex.Message);
+Log.Error(ex, "Database connection failed for {ConnectionString}", 
+    connectionString);
+Log.Error("Payment processing failed for transaction {TransactionId}",
+    transactionId);
+Log.Error(ex, "Failed to publish message to queue {QueueName} after {Attempts} attempts",
+    queueName, attempts);
+```
+
+**When to use:**
+- Exceptions that prevent an operation from completing
+- Failed external service calls (after retries)
+- Data validation failures that block processing
+- Resource unavailability (file not found, database down)
+- Security violations (authentication/authorization failures)
+
+**Note:** Always include the exception object when logging errors:
+
+<CodeGroup>
+
+```csharp Good
+try
+{
+    ProcessOrder(order);
+}
+catch (Exception ex)
+{
+    Log.Error(ex, "Failed to process order {OrderId}", order.Id);
+}
+```
+
+```csharp Avoid
+try
+{
+    ProcessOrder(order);
+}
+catch (Exception ex)
+{
+    // Missing exception object - stack trace is lost!
+    Log.Error("Failed to process order {OrderId}: {Message}", 
+        order.Id, ex.Message);
+}
+```
+
+</CodeGroup>
+
+### Fatal
+
+<Note>
+**Definition**: "If you have a pager, it goes off when one of these occurs."
+</Note>
+
+Use for critical errors that cause the application or a major subsystem to fail.
+
+```csharp
+Log.Fatal(ex, "Application startup failed, unable to load configuration");
+Log.Fatal(ex, "Database connection pool exhausted, application cannot continue");
+Log.Fatal("Unhandled exception in message processing thread, shutting down");
+Log.Fatal(ex, "Critical security failure: {SecurityEvent}", securityEvent);
+```
+
+**When to use:**
+- Application crashes
+- Unhandled exceptions in critical threads
+- Complete service unavailability
+- Data corruption detected
+- Security breaches
+- Configuration errors preventing startup
+
+**Note:** Fatal events typically trigger:
+- Immediate alerts (PagerDuty, SMS, etc.)
+- Incident response procedures
+- Application shutdown or restart
+
+## Configuring Minimum Level
+
+You can set the minimum log level globally or per-sink:
+
+<CodeGroup>
+
+```csharp Global Minimum Level
+var log = new LoggerConfiguration()
+    .MinimumLevel.Information()  // Only Information and above
+    .WriteTo.Console()
+    .WriteTo.File("log.txt")
+    .CreateLogger();
+```
+
+```csharp Per-Sink Minimum Level
+var log = new LoggerConfiguration()
+    .MinimumLevel.Debug()  // Default minimum level
+    .WriteTo.Console(
+        restrictedToMinimumLevel: LogEventLevel.Information)  // Console: Info+
+    .WriteTo.File("log.txt",
+        restrictedToMinimumLevel: LogEventLevel.Debug)  // File: Debug+
+    .CreateLogger();
+```
+
+```csharp Override by Source
+var log = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)  // Less noise from framework
+    .MinimumLevel.Override("MyApp.Performance", LogEventLevel.Verbose)  // Detailed for this namespace
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+</CodeGroup>
+
+## Dynamic Level Switching
+
+Use `LoggingLevelSwitch` to change the minimum level at runtime:
+
+```csharp
+var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+
+var log = new LoggerConfiguration()
+    .MinimumLevel.ControlledBy(levelSwitch)
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Later, enable debug logging temporarily
+levelSwitch.MinimumLevel = LogEventLevel.Debug;
+
+// Process some requests with detailed logging...
+
+// Return to normal
+levelSwitch.MinimumLevel = LogEventLevel.Information;
+```
+
+This is useful for:
+- Troubleshooting production issues without restarting
+- Temporary verbose logging for specific operations
+- A/B testing with different log levels
+
+## Checking if a Level is Enabled
+
+Avoid expensive operations if the level isn't enabled:
+
+```csharp
+if (log.IsEnabled(LogEventLevel.Debug))
+{
+    var expensiveData = CollectDetailedDiagnostics();
+    log.Debug("Diagnostics: {@DiagnosticData}", expensiveData);
+}
+
+// Or use the level-specific methods
+if (log.IsEnabled(LogEventLevel.Verbose))
+{
+    log.Verbose("Detailed trace: {Details}", BuildExpensiveDetails());
+}
+```
+
+## Best Practices
+
+### 1. Use Information as Your Default
+
+In production, start with `Information` as the minimum level. This captures the story of your application without overwhelming volume.
+
+### 2. Be Consistent Within Your Team
+
+Agree on what each level means in your application context:
+
+- What constitutes a Warning vs an Error?
+- When should Debug be used vs Verbose?
+- What errors are truly Fatal?
+
+### 3. Include Context at Higher Levels
+
+The more severe the event, the more context you should include:
+
+<CodeGroup>
+
+```csharp Minimal Context (Debug/Verbose)
+Log.Debug("Cache miss");
+```
+
+```csharp More Context (Information/Warning)
+Log.Information("Order {OrderId} processed in {ElapsedMs}ms",
+    orderId, elapsed);
+```
+
+```csharp Rich Context (Error/Fatal)
+Log.Error(ex, "Failed to process order {OrderId} for customer {CustomerId}. " +
+    "Order total: {Total:C}, Payment method: {PaymentMethod}, Attempt: {Attempt}",
+    orderId, customerId, total, paymentMethod, attempt);
+```
+
+</CodeGroup>
+
+### 4. Don't Log and Throw
+
+Avoid logging an exception if you're re-throwing it - let a higher layer log it once:
+
+<CodeGroup>
+
+```csharp Good
+public void ProcessOrder(Order order)
+{
+    try
+    {
+        SaveToDatabase(order);
+    }
+    catch (DbException ex)
+    {
+        Log.Error(ex, "Failed to save order {OrderId}", order.Id);
+        // Handle or propagate, but don't log again
+        throw;
+    }
+}
+```
+
+```csharp Avoid
+public void ProcessOrder(Order order)
+{
+    try
+    {
+        SaveToDatabase(order);
+    }
+    catch (DbException ex)
+    {
+        Log.Error(ex, "Database error");  // Logged here
+        throw;  // And will be logged again by caller
+    }
+}
+```
+
+</CodeGroup>
+
+### 5. Monitor Warning and Error Rates
+
+Track trends in Warning and Error events:
+- Sudden spike in Warnings? Investigate potential issues
+- Increasing Error rate? System health is degrading
+- Regular Fatal events? Critical problem needs immediate attention
+
+<Info>
+Log levels are evaluated before the log event is created. If a level is disabled, the event creation is skipped entirely, avoiding any performance overhead from parameter evaluation.
+</Info>

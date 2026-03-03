@@ -1,0 +1,438 @@
+---
+title: Log Enrichment
+description: Learn how to add contextual properties to log events using Serilog's enrichment system
+---
+
+Log enrichment is the process of adding additional properties to log events beyond what's explicitly provided in the logging call. Enrichers add contextual information that helps understand where, when, and under what circumstances events occurred.
+
+## What is Enrichment?
+
+Consider this basic log statement:
+
+```csharp
+Log.Information("User {UserName} logged in", userName);
+```
+
+With enrichment, you can automatically add properties like:
+- Machine name
+- Thread ID
+- Application version
+- Environment (Development, Production)
+- Request ID (for web applications)
+- User session information
+
+The enriched event might include:
+
+```json
+{
+  "@t": "2024-03-03T10:30:00Z",
+  "@mt": "User {UserName} logged in",
+  "UserName": "Alice",
+  "MachineName": "web-server-01",
+  "ThreadId": 42,
+  "Environment": "Production",
+  "ApplicationVersion": "2.5.1"
+}
+```
+
+## The ILogEventEnricher Interface
+
+Enrichers implement the `ILogEventEnricher` interface (`Core/ILogEventEnricher.cs:20-28`):
+
+```csharp
+public interface ILogEventEnricher
+{
+    void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory);
+}
+```
+
+The `Enrich` method:
+- Receives the `LogEvent` being created
+- Uses `ILogEventPropertyFactory` to create properties
+- Adds properties to the event
+
+## Built-in Enrichers
+
+### Fixed Property Enricher
+
+Add constant properties to all log events:
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.WithProperty("Application", "MyApp")
+    .Enrich.WithProperty("Environment", "Production")
+    .Enrich.WithProperty("Version", "2.5.1")
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+From the source code (`Core/Enrichers/PropertyEnricher.cs:20-59`), the `PropertyEnricher` adds properties:
+
+```csharp
+public class PropertyEnricher : ILogEventEnricher
+{
+    readonly string _name;
+    readonly object? _value;
+    readonly bool _destructureObjects;
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        logEvent.AddPropertyIfAbsent(propertyFactory, _name, _value, _destructureObjects);
+    }
+}
+```
+
+<Note>
+Properties added by enrichers use `AddPropertyIfAbsent`, meaning they won't override properties explicitly provided in the log call.
+</Note>
+
+### Machine Name
+
+Add the machine name to all events:
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.WithMachineName()
+    .WriteTo.Console()
+    .CreateLogger();
+
+// All events include: MachineName = "SERVER-01"
+```
+
+### Thread ID
+
+Add the thread identifier:
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.WithThreadId()
+    .WriteTo.Console()
+    .CreateLogger();
+
+// All events include: ThreadId = 42
+```
+
+### Environment Information
+
+Add environment name, user name, or other system information:
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.WithEnvironmentName()      // Development, Staging, Production
+    .Enrich.WithEnvironmentUserName()  // Current user running the process
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Context-Based Enrichment
+
+Context-based enrichers add properties that vary during execution.
+
+### LogContext
+
+The most powerful enrichment feature is `LogContext`, which allows pushing properties onto a context stack that automatically enriches all events within a scope.
+
+From the source code (`Context/LogContext.cs:38`), `LogContext` uses `AsyncLocal` to maintain context across async boundaries:
+
+```csharp
+public static class LogContext
+{
+    public static IDisposable PushProperty(string name, object? value, 
+        bool destructureObjects = false)
+    {
+        // Returns IDisposable that removes the property when disposed
+    }
+}
+```
+
+**Configuration:**
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.FromLogContext()  // Enable LogContext enrichment
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+**Usage:**
+
+```csharp
+using (LogContext.PushProperty("OrderId", orderId))
+{
+    Log.Information("Processing order");
+    // Property: OrderId = 12345
+    
+    ProcessPayment();
+    // All logs in ProcessPayment() include OrderId
+    
+    using (LogContext.PushProperty("PaymentMethod", "CreditCard"))
+    {
+        Log.Information("Charging card");
+        // Properties: OrderId = 12345, PaymentMethod = "CreditCard"
+    }
+    
+    Log.Information("Order completed");
+    // Property: OrderId = 12345 (PaymentMethod removed)
+}
+
+Log.Information("Cleanup");
+// No extra properties (OrderId removed)
+```
+
+<Info>
+`LogContext` properties are automatically maintained across async/await calls, making them perfect for tracking operation context through asynchronous code.
+</Info>
+
+## Custom Enrichers
+
+Create custom enrichers by implementing `ILogEventEnricher`:
+
+### Example: Request ID Enricher
+
+```csharp
+public class RequestIdEnricher : ILogEventEnricher
+{
+    readonly string _requestId;
+
+    public RequestIdEnricher()
+    {
+        _requestId = Guid.NewGuid().ToString();
+    }
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var property = propertyFactory.CreateProperty("RequestId", _requestId);
+        logEvent.AddPropertyIfAbsent(property);
+    }
+}
+```
+
+**Usage:**
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.With<RequestIdEnricher>()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Example: Conditional Enricher
+
+Enrich only specific events:
+
+```csharp
+public class ErrorCodeEnricher : ILogEventEnricher
+{
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        if (logEvent.Level >= LogEventLevel.Error && 
+            logEvent.Exception != null)
+        {
+            var errorCode = GetErrorCode(logEvent.Exception);
+            var property = propertyFactory.CreateProperty("ErrorCode", errorCode);
+            logEvent.AddPropertyIfAbsent(property);
+        }
+    }
+
+    private string GetErrorCode(Exception exception)
+    {
+        return exception switch
+        {
+            ArgumentNullException => "ERR_NULL_ARG",
+            InvalidOperationException => "ERR_INVALID_OP",
+            _ => "ERR_UNKNOWN"
+        };
+    }
+}
+```
+
+## ForContext() Enrichment
+
+Create child loggers with additional context:
+
+```csharp
+var log = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Create a logger with source context
+var classLogger = log.ForContext<OrderProcessor>();
+// All events include: SourceContext = "MyApp.OrderProcessor"
+
+// Add custom properties
+var requestLogger = log.ForContext("RequestId", requestId)
+                       .ForContext("UserId", userId);
+requestLogger.Information("Processing request");
+// Properties: RequestId = "abc-123", UserId = 42
+```
+
+The `ForContext()` methods create new logger instances with additional enrichers, without affecting the parent logger.
+
+## Enrichment Order and Precedence
+
+Properties are applied in this order:
+
+1. **Explicitly provided** in the log call: `Log.Information("User {UserId}", id)`
+2. **ForContext() enrichers**: Properties from child loggers
+3. **LogContext enrichers**: Properties pushed onto the context stack
+4. **Global enrichers**: Configured in `LoggerConfiguration`
+
+Properties added later don't override earlier ones (using `AddPropertyIfAbsent`):
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.WithProperty("Environment", "Production")
+    .WriteTo.Console()
+    .CreateLogger();
+
+// This won't override the enricher's Environment property
+log.Information("Message with {Environment}", "Custom");
+// Property Environment = "Custom" (explicit wins)
+
+log.Information("Message");
+// Property Environment = "Production" (from enricher)
+```
+
+## Web Application Enrichment
+
+For ASP.NET Core applications, enrich with HTTP context:
+
+```csharp
+public class HttpContextEnricher : ILogEventEnricher
+{
+    readonly IHttpContextAccessor _httpContextAccessor;
+
+    public HttpContextEnricher(IHttpContextAccessor httpContextAccessor)
+    {
+        _httpContextAccessor = httpContextAccessor;
+    }
+
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        var httpContext = _httpContextAccessor.HttpContext;
+        if (httpContext == null)
+            return;
+
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty("RequestPath", httpContext.Request.Path));
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty("RequestMethod", httpContext.Request.Method));
+        logEvent.AddPropertyIfAbsent(
+            propertyFactory.CreateProperty("ClientIp", httpContext.Connection.RemoteIpAddress));
+    }
+}
+```
+
+**Register in Startup:**
+
+```csharp
+services.AddHttpContextAccessor();
+
+Log.Logger = new LoggerConfiguration()
+    .Enrich.With(new HttpContextEnricher(
+        serviceProvider.GetRequiredService<IHttpContextAccessor>()))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Best Practices
+
+### 1. Use LogContext for Request/Operation Tracking
+
+```csharp
+public async Task ProcessOrder(Order order)
+{
+    using (LogContext.PushProperty("OrderId", order.Id))
+    using (LogContext.PushProperty("CustomerId", order.CustomerId))
+    {
+        Log.Information("Starting order processing");
+        
+        await ValidateOrder(order);
+        await ProcessPayment(order);
+        await FulfillOrder(order);
+        
+        Log.Information("Order processing completed");
+    }
+    // All logs include OrderId and CustomerId
+}
+```
+
+### 2. Add Environment-Specific Properties
+
+```csharp
+var log = new LoggerConfiguration()
+    .Enrich.WithProperty("Application", "MyApp")
+    .Enrich.WithProperty("Environment", environment)
+    .Enrich.WithProperty("Version", Assembly.GetExecutingAssembly().GetName().Version)
+    .Enrich.WithMachineName()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### 3. Keep Enricher Logic Simple
+
+Enrichers run for every log event. Avoid expensive operations:
+
+<CodeGroup>
+
+```csharp Good
+public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+{
+    // Fast: accessing pre-computed or cached value
+    logEvent.AddPropertyIfAbsent(
+        propertyFactory.CreateProperty("ThreadId", Thread.CurrentThread.ManagedThreadId));
+}
+```
+
+```csharp Avoid
+public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+{
+    // Slow: database call on every log event!
+    var userData = database.GetCurrentUser();
+    logEvent.AddPropertyIfAbsent(
+        propertyFactory.CreateProperty("UserData", userData, destructureObjects: true));
+}
+```
+
+</CodeGroup>
+
+### 4. Use ForContext for Component Identification
+
+```csharp
+public class OrderProcessor
+{
+    readonly ILogger _log;
+    
+    public OrderProcessor(ILogger log)
+    {
+        _log = log.ForContext<OrderProcessor>();
+        // All logs include SourceContext = "MyApp.OrderProcessor"
+    }
+    
+    public void Process(Order order)
+    {
+        _log.Information("Processing order {OrderId}", order.Id);
+    }
+}
+```
+
+### 5. Destructure Complex Objects Carefully
+
+```csharp
+using (LogContext.PushProperty("User", user, destructureObjects: true))
+{
+    // Be cautious: this serializes the entire user object on every log event
+    Log.Information("User action");
+}
+
+// Better: Add only what you need
+using (LogContext.PushProperty("UserId", user.Id))
+using (LogContext.PushProperty("UserRole", user.Role))
+{
+    Log.Information("User action");
+}
+```
+
+<Note>
+Enrichment is most powerful when combined with structured sinks (like Seq, Elasticsearch, or Application Insights) that can index and query the enriched properties.
+</Note>

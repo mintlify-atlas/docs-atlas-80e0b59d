@@ -1,0 +1,296 @@
+---
+title: "Configuring Sinks (WriteTo)"
+description: "Configure output destinations for log events using LoggerSinkConfiguration"
+---
+
+The `WriteTo` property on `LoggerConfiguration` provides access to `LoggerSinkConfiguration`, which controls where log events are written.
+
+## Basic Sink Configuration
+
+### Sink Method
+
+Write log events to any `ILogEventSink` implementation.
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public LoggerConfiguration Sink(
+    ILogEventSink logEventSink,
+    LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum,
+    LoggingLevelSwitch? levelSwitch = null)
+```
+
+**Example:**
+
+```csharp
+var sink = new MyCustomSink();
+
+var logger = new LoggerConfiguration()
+    .WriteTo.Sink(sink)
+    .CreateLogger();
+```
+
+### Sink with Minimum Level
+
+Restrict which events are sent to a specific sink:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Verbose()
+    .WriteTo.Sink(consoleSink, LogEventLevel.Information)
+    .WriteTo.Sink(fileSink, LogEventLevel.Warning)
+    .CreateLogger();
+```
+
+### Sink with Level Switch
+
+Dynamically control the minimum level at runtime:
+
+```csharp
+var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+
+var logger = new LoggerConfiguration()
+    .WriteTo.Sink(sink, levelSwitch: levelSwitch)
+    .CreateLogger();
+
+// Later, change the level dynamically
+levelSwitch.MinimumLevel = LogEventLevel.Warning;
+```
+
+<Note>
+When both `restrictedToMinimumLevel` and `levelSwitch` are provided, the level switch takes precedence and the minimum level is ignored.
+</Note>
+
+## Generic Sink Method
+
+Configure a sink by type when it has a parameterless constructor:
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public LoggerConfiguration Sink<TSink>(
+    LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum,
+    LoggingLevelSwitch? levelSwitch = null)
+    where TSink : ILogEventSink, new()
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.Sink<MyCustomSink>()
+    .CreateLogger();
+```
+
+## Batched Sinks
+
+Write log events to an `IBatchedLogEventSink` with automatic buffering and batching:
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public LoggerConfiguration Sink(
+    IBatchedLogEventSink batchedLogEventSink,
+    BatchingOptions batchingOptions,
+    LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum,
+    LoggingLevelSwitch? levelSwitch = null)
+```
+
+**Example:**
+
+```csharp
+var batchedSink = new MyBatchedSink();
+var options = new BatchingOptions
+{
+    BatchSizeLimit = 100,
+    BufferingTimeLimit = TimeSpan.FromSeconds(2)
+};
+
+var logger = new LoggerConfiguration()
+    .WriteTo.Sink(batchedSink, options)
+    .CreateLogger();
+```
+
+### Generic Batched Sink
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+var logger = new LoggerConfiguration()
+    .WriteTo.Sink<MyBatchedSink>(options)
+    .CreateLogger();
+```
+
+## Sub-Loggers
+
+Write to a sub-logger for additional processing with independent configuration:
+
+### Configure Sub-Logger Inline
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public LoggerConfiguration Logger(
+    Action<LoggerConfiguration> configureLogger,
+    LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum,
+    LoggingLevelSwitch? levelSwitch = null)
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.Logger(lc => lc
+        .MinimumLevel.Warning()
+        .WriteTo.File("warnings.txt"))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Use Existing Logger
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public LoggerConfiguration Logger(
+    ILogger logger,
+    bool attemptDispose = false,
+    LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum,
+    LoggingLevelSwitch? levelSwitch = null)
+```
+
+**Example:**
+
+```csharp
+var subLogger = new LoggerConfiguration()
+    .WriteTo.File("sub.txt")
+    .CreateLogger();
+
+var logger = new LoggerConfiguration()
+    .WriteTo.Logger(subLogger)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+<Warning>
+- Sub-loggers cannot log at a more verbose level than the parent
+- Minimum level overrides are not supported on sub-loggers
+- Set `attemptDispose: true` to dispose the sub-logger when the parent is disposed
+</Warning>
+
+## Conditional Sinks
+
+Write to a sink only when a condition is met:
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public LoggerConfiguration Conditional(
+    Func<LogEvent, bool> condition,
+    Action<LoggerSinkConfiguration> configureSink)
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.Conditional(
+        evt => evt.Level >= LogEventLevel.Warning,
+        wt => wt.File("warnings.txt"))
+    .CreateLogger();
+```
+
+## Fallback Chains
+
+Write to a primary sink, falling back to secondary sinks on failure:
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public LoggerConfiguration FallbackChain(
+    Action<LoggerSinkConfiguration> configureSink,
+    Action<LoggerSinkConfiguration> configureFallback,
+    params Action<LoggerSinkConfiguration>[] configureSubsequentFallbacks)
+```
+
+**Example:**
+
+```csharp
+var logger = new LoggerConfiguration()
+    .WriteTo.FallbackChain(
+        primary => primary.RemoteService(),
+        fallback => fallback.File("fallback.txt"),
+        final => final.Console())
+    .CreateLogger();
+```
+
+<Note>
+Fallbacks rely on the target sink either:
+- Synchronously throwing exceptions on failure, or
+- Implementing the `ISetLoggingFailureListener` interface
+</Note>
+
+## Failure Reporting
+
+Report sink failures through an `ILoggingFailureListener`:
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public LoggerConfiguration Fallible(
+    Action<LoggerSinkConfiguration> configureSink,
+    ILoggingFailureListener failureListener)
+```
+
+**Example:**
+
+```csharp
+var failureListener = new MyFailureListener();
+
+var logger = new LoggerConfiguration()
+    .WriteTo.Fallible(
+        wt => wt.RemoteService(),
+        failureListener)
+    .CreateLogger();
+```
+
+## Helper Methods
+
+### CreateSink
+
+Construct sinks outside of a logger pipeline:
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public static ILogEventSink CreateSink(
+    Action<LoggerSinkConfiguration> configure)
+```
+
+**Example:**
+
+```csharp
+var sink = LoggerSinkConfiguration.CreateSink(wt => wt
+    .Console()
+    .File("log.txt"));
+```
+
+### Wrap
+
+Construct wrapper sinks with automatic disposal delegation:
+
+```csharp src/Serilog/Configuration/LoggerSinkConfiguration.cs
+public static ILogEventSink Wrap(
+    Func<ILogEventSink, ILogEventSink> wrapSink,
+    Action<LoggerSinkConfiguration> configureWrappedSink)
+```
+
+**Example:**
+
+```csharp
+var wrappedSink = LoggerSinkConfiguration.Wrap(
+    sink => new MySinkWrapper(sink),
+    wt => wt.Console());
+
+var logger = new LoggerConfiguration()
+    .WriteTo.Sink(wrappedSink)
+    .CreateLogger();
+```
+
+## Multiple Sinks Example
+
+Combine multiple sinks with different configurations:
+
+```csharp
+var consoleSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+var fileSwitch = new LoggingLevelSwitch(LogEventLevel.Debug);
+
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Verbose()
+    .WriteTo.Sink(consoleSink, levelSwitch: consoleSwitch)
+    .WriteTo.Sink(fileSink, levelSwitch: fileSwitch)
+    .WriteTo.Logger(lc => lc
+        .MinimumLevel.Warning()
+        .WriteTo.File("errors.txt"))
+    .CreateLogger();
+```

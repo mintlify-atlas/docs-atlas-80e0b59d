@@ -1,0 +1,152 @@
+---
+title: Structured Logging
+description: Understanding structured logging and how it differs from traditional text-based logging
+---
+
+Structured logging is the practice of writing log events in a format that preserves their structure and makes them easily queryable. Unlike traditional text-based logging, structured logging captures log data as structured data (typically key-value pairs) rather than unstructured text strings.
+
+## Text Logging vs Structured Logging
+
+### Traditional Text Logging
+
+With traditional logging, you might write:
+
+```csharp
+log.Information("User " + user.Name + " logged in from " + ipAddress);
+// Output: User Alice logged in from 192.168.1.1
+```
+
+This creates a plain text message. If you want to query all logins from a specific IP address, you need to parse text strings.
+
+### Structured Logging with Serilog
+
+With Serilog's structured logging approach:
+
+```csharp
+Log.Information("User {UserName} logged in from {IpAddress}", user.Name, ipAddress);
+```
+
+This creates a structured log event where `UserName` and `IpAddress` are first-class properties that can be:
+- Queried and filtered efficiently
+- Indexed by log aggregation systems
+- Analyzed without text parsing
+
+<Note>
+The message template `"User {UserName} logged in from {IpAddress}"` remains constant, making it easy to identify all occurrences of the same event type.
+</Note>
+
+## How Serilog Captures Structure
+
+Serilog uses message templates to capture both a human-readable message and structured data. Each log event (represented by the `LogEvent` class) contains:
+
+- **Timestamp**: When the event occurred
+- **Level**: The severity level (Information, Warning, Error, etc.)
+- **MessageTemplate**: The template string with placeholders
+- **Properties**: A dictionary of captured property values
+- **Exception**: An optional exception object
+- **TraceId/SpanId**: Optional distributed tracing identifiers
+
+From the source code (`Events/LogEvent.cs:23-45`):
+
+```csharp
+public class LogEvent
+{
+    public DateTimeOffset Timestamp { get; }
+    public LogEventLevel Level { get; }
+    public MessageTemplate MessageTemplate { get; }
+    public IReadOnlyDictionary<string, LogEventPropertyValue> Properties { get; }
+    public Exception? Exception { get; }
+    // ...
+}
+```
+
+## Benefits of Structured Logging
+
+### 1. Powerful Querying
+
+Query logs by specific property values:
+
+```sql
+SELECT * FROM logs 
+WHERE UserName = 'Alice' 
+  AND IpAddress LIKE '192.168.%'
+```
+
+### 2. Consistent Event Types
+
+The same message template identifies the same type of event, regardless of parameter values:
+
+```csharp
+Log.Information("User {UserName} logged in from {IpAddress}", "Alice", "192.168.1.1");
+Log.Information("User {UserName} logged in from {IpAddress}", "Bob", "10.0.0.5");
+```
+
+Both events have the same template: `"User {UserName} logged in from {IpAddress}"`
+
+### 3. Type Preservation
+
+Structured properties preserve their original types:
+
+```csharp
+Log.Information("Processing order {OrderId} for {Amount:C}", 12345, 99.95m);
+```
+
+The `OrderId` is stored as an integer and `Amount` as a decimal, not as strings.
+
+### 4. Reduced Storage and Better Compression
+
+Message templates are stored once and reused, while only property values vary:
+
+```json
+{
+  "@t": "2024-03-03T10:30:00Z",
+  "@mt": "User {UserName} logged in from {IpAddress}",
+  "UserName": "Alice",
+  "IpAddress": "192.168.1.1"
+}
+```
+
+## Working with Complex Objects
+
+Structured logging really shines when capturing complex objects:
+
+<CodeGroup>
+
+```csharp Default Capture
+// Captures object by calling ToString()
+var order = new Order { Id = 123, Total = 99.95m };
+Log.Information("Created order {Order}", order);
+// Properties: Order = "Order { Id = 123 }"
+```
+
+```csharp Destructuring
+// Captures all public properties
+var order = new Order { Id = 123, Total = 99.95m };
+Log.Information("Created order {@Order}", order);
+// Properties: Order = { Id: 123, Total: 99.95 }
+```
+
+```csharp Stringify
+// Forces string representation
+var order = new Order { Id = 123, Total = 99.95m };
+Log.Information("Created order {$Order}", order);
+// Properties: Order = "Order { Id = 123, Total = 99.95 }"
+```
+
+</CodeGroup>
+
+<Info>
+The `@` and `$` prefixes control how objects are captured. See [Message Templates](/concepts/message-templates) for more details.
+</Info>
+
+## Best Practices
+
+1. **Use named placeholders**: `{UserName}` instead of positional `{0}`
+2. **Keep templates constant**: Don't interpolate values into the template itself
+3. **Use semantic property names**: `{OrderId}` is better than `{Id}`
+4. **Leverage destructuring**: Use `@` for complex objects you want to query
+5. **Preserve types**: Let Serilog capture the original type rather than converting to strings
+
+<Note>
+Structured logging is most valuable when paired with a log aggregation system that can index and query structured data, such as Elasticsearch, Seq, or Application Insights.
+</Note>

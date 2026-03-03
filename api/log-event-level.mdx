@@ -1,0 +1,117 @@
+---
+title: LogEventLevel
+description: Enum that specifies the meaning and relative importance of a log event
+---
+
+## Overview
+
+The `LogEventLevel` enum specifies the severity and importance of log events. It provides six levels ranging from detailed diagnostic information to critical failures.
+
+## Values
+
+<ResponseField name="Verbose" type="0">
+  Anything and everything you might want to know about a running block of code. This is the most detailed level and should be used for very granular logging during development and debugging.
+</ResponseField>
+
+<ResponseField name="Debug" type="1">
+  Internal system events that aren't necessarily observable from the outside. Use this level for diagnostic information useful for debugging, but too detailed for normal production use.
+</ResponseField>
+
+<ResponseField name="Information" type="2">
+  The lifeblood of operational intelligence - things happen. This level tracks the general flow of the application and key business events.
+</ResponseField>
+
+<ResponseField name="Warning" type="3">
+  Service is degraded or endangered. This indicates potential problems or unusual situations that don't prevent the application from functioning.
+</ResponseField>
+
+<ResponseField name="Error" type="4">
+  Functionality is unavailable, invariants are broken or data is lost. This level indicates errors that prevent specific operations from completing successfully.
+</ResponseField>
+
+<ResponseField name="Fatal" type="5">
+  If you have a pager, it goes off when one of these occurs. This is the highest severity level, indicating critical failures that may cause the application to terminate.
+</ResponseField>
+
+## Usage
+
+```csharp
+// Setting minimum level
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .CreateLogger();
+
+// Writing at different levels
+Log.Verbose("Detailed trace information");
+Log.Debug("Diagnostic information");
+Log.Information("User logged in successfully");
+Log.Warning("Disk space running low");
+Log.Error("Failed to process payment");
+Log.Fatal("Database connection lost, shutting down");
+```
+
+## Level Guidelines
+
+### Verbose
+Use for:
+- Loop iterations
+- Method entry/exit
+- Variable values during execution
+- Any information needed for deep troubleshooting
+
+### Debug
+Use for:
+- Cache hits/misses
+- Configuration values
+- Query parameters
+- Internal state changes
+
+### Information
+Use for:
+- Application startup/shutdown
+- User actions
+- Business transactions
+- Service calls
+
+### Warning
+Use for:
+- Deprecated API usage
+- Poor use of API
+- Recoverable errors
+- Timeouts (that are handled)
+- Connection issues (with retry)
+
+### Error
+Use for:
+- Unhandled exceptions
+- Failed operations
+- Invalid input that prevents processing
+- Resource exhaustion
+
+### Fatal
+Use for:
+- Critical resource failures
+- Application crashes
+- Data corruption
+- Unrecoverable errors requiring immediate attention
+
+## Filtering by Level
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    .CreateLogger();
+```
+
+## Comparison
+
+Log levels can be compared directly:
+
+```csharp
+if (logEvent.Level >= LogEventLevel.Warning)
+{
+    // Handle warning or higher severity
+}
+```

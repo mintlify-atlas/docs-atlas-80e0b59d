@@ -1,0 +1,494 @@
+---
+title: ILogger Interface
+description: The core Serilog logging API, used for writing log events.
+---
+
+The core Serilog logging API, used for writing log events. The methods on `ILogger` are guaranteed never to throw exceptions.
+
+```csharp
+var log = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+var thing = "World";
+log.Information("Hello, {Thing}!", thing);
+```
+
+## Context Methods
+
+Create contextual loggers with additional enrichment.
+
+### ForContext(ILogEventEnricher enricher)
+
+Create a logger that enriches log events via the provided enricher.
+
+<ParamField path="enricher" type="ILogEventEnricher" required>
+  Enricher that applies in the context.
+</ParamField>
+
+<ResponseField name="returns" type="ILogger">
+  A logger that will enrich log events as specified.
+</ResponseField>
+
+### ForContext(IEnumerable\<ILogEventEnricher\> enrichers)
+
+Create a logger that enriches log events via the provided enrichers.
+
+<ParamField path="enrichers" type="IEnumerable<ILogEventEnricher>" required>
+  Enrichers that apply in the context.
+</ParamField>
+
+<ResponseField name="returns" type="ILogger">
+  A logger that will enrich log events as specified.
+</ResponseField>
+
+### ForContext(string propertyName, object? value, bool destructureObjects = false)
+
+Create a logger that enriches log events with the specified property.
+
+<ParamField path="propertyName" type="string" required>
+  The name of the property. Must be non-empty.
+</ParamField>
+
+<ParamField path="value" type="object?">
+  The property value.
+</ParamField>
+
+<ParamField path="destructureObjects" type="bool" default="false">
+  If `true`, the value will be serialized as a structured object if possible; if `false`, the object will be recorded as a scalar or simple array.
+</ParamField>
+
+<ResponseField name="returns" type="ILogger">
+  A logger that will enrich log events as specified.
+</ResponseField>
+
+### ForContext\<TSource\>()
+
+Create a logger that marks log events as being from the specified source type.
+
+<ResponseField name="returns" type="ILogger">
+  A logger that will enrich log events as specified.
+</ResponseField>
+
+### ForContext(Type source)
+
+Create a logger that marks log events as being from the specified source type.
+
+<ParamField path="source" type="Type" required>
+  Type generating log messages in the context.
+</ParamField>
+
+<ResponseField name="returns" type="ILogger">
+  A logger that will enrich log events as specified.
+</ResponseField>
+
+## Core Write Methods
+
+### Write(LogEvent logEvent)
+
+Write an event to the log.
+
+<ParamField path="logEvent" type="LogEvent" required>
+  The event to write.
+</ParamField>
+
+### Write(LogEventLevel level, string messageTemplate)
+
+Write a log event with the specified level.
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+### Write\<T\>(LogEventLevel level, string messageTemplate, T propertyValue)
+
+Write a log event with the specified level.
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+<ParamField path="propertyValue" type="T" required>
+  Object positionally formatted into the message template.
+</ParamField>
+
+### Write\<T0, T1\>(LogEventLevel level, string messageTemplate, T0 propertyValue0, T1 propertyValue1)
+
+Write a log event with the specified level.
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+<ParamField path="propertyValue0" type="T0" required>
+  Object positionally formatted into the message template.
+</ParamField>
+
+<ParamField path="propertyValue1" type="T1" required>
+  Object positionally formatted into the message template.
+</ParamField>
+
+### Write\<T0, T1, T2\>(LogEventLevel level, string messageTemplate, T0 propertyValue0, T1 propertyValue1, T2 propertyValue2)
+
+Write a log event with the specified level.
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+<ParamField path="propertyValue0" type="T0" required>
+  Object positionally formatted into the message template.
+</ParamField>
+
+<ParamField path="propertyValue1" type="T1" required>
+  Object positionally formatted into the message template.
+</ParamField>
+
+<ParamField path="propertyValue2" type="T2" required>
+  Object positionally formatted into the message template.
+</ParamField>
+
+### Write(LogEventLevel level, string messageTemplate, params object?[]? propertyValues)
+
+Write a log event with the specified level.
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+<ParamField path="propertyValues" type="object?[]?">
+  Objects positionally formatted into the message template.
+</ParamField>
+
+### Write(LogEventLevel level, Exception? exception, string messageTemplate)
+
+Write a log event with the specified level and associated exception.
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="exception" type="Exception?">
+  Exception related to the event.
+</ParamField>
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+### Write(LogEventLevel level, Exception? exception, string messageTemplate, params object?[]? propertyValues)
+
+Write a log event with the specified level and associated exception.
+
+<ParamField path="level" type="LogEventLevel" required>
+  The level of the event.
+</ParamField>
+
+<ParamField path="exception" type="Exception?">
+  Exception related to the event.
+</ParamField>
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+<ParamField path="propertyValues" type="object?[]?">
+  Objects positionally formatted into the message template.
+</ParamField>
+
+### IsEnabled(LogEventLevel level)
+
+Determine if events at the specified level will be passed through to the log sinks.
+
+<ParamField path="level" type="LogEventLevel" required>
+  Level to check.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  `true` if the level is enabled; otherwise, `false`.
+</ResponseField>
+
+## Verbose Methods
+
+Write log events with the `Verbose` level.
+
+### Verbose(string messageTemplate)
+
+Write a log event with the Verbose level.
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+```csharp
+Log.Verbose("Staring into space, wondering if we're alone.");
+```
+
+### Verbose\<T\>(string messageTemplate, T propertyValue)
+
+### Verbose\<T0, T1\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1)
+
+### Verbose\<T0, T1, T2\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1, T2 propertyValue2)
+
+### Verbose(string messageTemplate, params object?[]? propertyValues)
+
+### Verbose(Exception? exception, string messageTemplate)
+
+Write a log event with the Verbose level and associated exception.
+
+```csharp
+Log.Verbose(ex, "Staring into space, wondering where this comet came from.");
+```
+
+### Verbose(Exception? exception, string messageTemplate, params object?[]? propertyValues)
+
+## Debug Methods
+
+Write log events with the `Debug` level.
+
+### Debug(string messageTemplate)
+
+Write a log event with the Debug level.
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+```csharp
+Log.Debug("Starting up at {StartedAt}.", DateTime.Now);
+```
+
+### Debug\<T\>(string messageTemplate, T propertyValue)
+
+### Debug\<T0, T1\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1)
+
+### Debug\<T0, T1, T2\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1, T2 propertyValue2)
+
+### Debug(string messageTemplate, params object?[]? propertyValues)
+
+### Debug(Exception? exception, string messageTemplate)
+
+Write a log event with the Debug level and associated exception.
+
+```csharp
+Log.Debug(ex, "Swallowing a mundane exception.");
+```
+
+### Debug(Exception? exception, string messageTemplate, params object?[]? propertyValues)
+
+## Information Methods
+
+Write log events with the `Information` level.
+
+### Information(string messageTemplate)
+
+Write a log event with the Information level.
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+```csharp
+Log.Information("Processed {RecordCount} records in {TimeMS}.", records.Length, sw.ElapsedMilliseconds);
+```
+
+### Information\<T\>(string messageTemplate, T propertyValue)
+
+### Information\<T0, T1\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1)
+
+### Information\<T0, T1, T2\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1, T2 propertyValue2)
+
+### Information(string messageTemplate, params object?[]? propertyValues)
+
+### Information(Exception? exception, string messageTemplate)
+
+Write a log event with the Information level and associated exception.
+
+```csharp
+Log.Information(ex, "Processed {RecordCount} records in {TimeMS}.", records.Length, sw.ElapsedMilliseconds);
+```
+
+### Information(Exception? exception, string messageTemplate, params object?[]? propertyValues)
+
+## Warning Methods
+
+Write log events with the `Warning` level.
+
+### Warning(string messageTemplate)
+
+Write a log event with the Warning level.
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+```csharp
+Log.Warning("Skipped {SkipCount} records.", skippedRecords.Length);
+```
+
+### Warning\<T\>(string messageTemplate, T propertyValue)
+
+### Warning\<T0, T1\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1)
+
+### Warning\<T0, T1, T2\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1, T2 propertyValue2)
+
+### Warning(string messageTemplate, params object?[]? propertyValues)
+
+### Warning(Exception? exception, string messageTemplate)
+
+Write a log event with the Warning level and associated exception.
+
+```csharp
+Log.Warning(ex, "Skipped {SkipCount} records.", skippedRecords.Length);
+```
+
+### Warning(Exception? exception, string messageTemplate, params object?[]? propertyValues)
+
+## Error Methods
+
+Write log events with the `Error` level.
+
+### Error(string messageTemplate)
+
+Write a log event with the Error level.
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+```csharp
+Log.Error("Failed {ErrorCount} records.", brokenRecords.Length);
+```
+
+### Error\<T\>(string messageTemplate, T propertyValue)
+
+### Error\<T0, T1\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1)
+
+### Error\<T0, T1, T2\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1, T2 propertyValue2)
+
+### Error(string messageTemplate, params object?[]? propertyValues)
+
+### Error(Exception? exception, string messageTemplate)
+
+Write a log event with the Error level and associated exception.
+
+```csharp
+Log.Error(ex, "Failed {ErrorCount} records.", brokenRecords.Length);
+```
+
+### Error(Exception? exception, string messageTemplate, params object?[]? propertyValues)
+
+## Fatal Methods
+
+Write log events with the `Fatal` level.
+
+### Fatal(string messageTemplate)
+
+Write a log event with the Fatal level.
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing the event.
+</ParamField>
+
+```csharp
+Log.Fatal("Process terminating.");
+```
+
+### Fatal\<T\>(string messageTemplate, T propertyValue)
+
+### Fatal\<T0, T1\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1)
+
+### Fatal\<T0, T1, T2\>(string messageTemplate, T0 propertyValue0, T1 propertyValue1, T2 propertyValue2)
+
+### Fatal(string messageTemplate, params object?[]? propertyValues)
+
+### Fatal(Exception? exception, string messageTemplate)
+
+Write a log event with the Fatal level and associated exception.
+
+```csharp
+Log.Fatal(ex, "Process terminating.");
+```
+
+### Fatal(Exception? exception, string messageTemplate, params object?[]? propertyValues)
+
+## Binding Methods
+
+### BindMessageTemplate(string messageTemplate, object?[]? propertyValues, out MessageTemplate? parsedTemplate, out IEnumerable\<LogEventProperty\>? boundProperties)
+
+Uses configured scalar conversion and destructuring rules to bind a set of properties to a message template. Returns false if the template or values are invalid (ILogger methods never throw exceptions).
+
+<ParamField path="messageTemplate" type="string" required>
+  Message template describing an event.
+</ParamField>
+
+<ParamField path="propertyValues" type="object?[]?">
+  Objects positionally formatted into the message template.
+</ParamField>
+
+<ParamField path="parsedTemplate" type="MessageTemplate?" required>
+  The internal representation of the template, which may be used to render the boundProperties as text.
+</ParamField>
+
+<ParamField path="boundProperties" type="IEnumerable<LogEventProperty>?" required>
+  Captured properties from the template and propertyValues.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  True if binding succeeded, false otherwise.
+</ResponseField>
+
+```csharp
+MessageTemplate template;
+IEnumerable<LogEventProperty> properties;
+if (Log.BindMessageTemplate("Hello, {Name}!", new[] { "World" }, out template, out properties)
+{
+    var propsByName = properties.ToDictionary(p => p.Name, p => p.Value);
+    Console.WriteLine(template.Render(propsByName, null));
+    // -> "Hello, World!"
+}
+```
+
+### BindProperty(string? propertyName, object? value, bool destructureObjects, out LogEventProperty? property)
+
+Uses configured scalar conversion and destructuring rules to bind a property value to its captured representation.
+
+<ParamField path="propertyName" type="string?" required>
+  The name of the property. Must be non-empty.
+</ParamField>
+
+<ParamField path="value" type="object?">
+  The property value.
+</ParamField>
+
+<ParamField path="destructureObjects" type="bool" required>
+  If `true`, the value will be serialized as a structured object if possible; if `false`, the object will be recorded as a scalar or simple array.
+</ParamField>
+
+<ParamField path="property" type="LogEventProperty?" required>
+  The resulting property.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  True if the property could be bound, otherwise false (ILogger methods never throw exceptions).
+</ResponseField>

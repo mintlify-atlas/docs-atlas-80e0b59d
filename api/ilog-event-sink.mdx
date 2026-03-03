@@ -1,0 +1,149 @@
+---
+title: ILogEventSink
+description: Interface for implementing custom log event destinations in Serilog
+---
+
+The `ILogEventSink` interface defines the contract for log event destinations in Serilog. Implementing this interface allows you to create custom sinks that write log events to any destination, such as files, databases, cloud services, or external systems.
+
+## Interface Definition
+
+```csharp
+public interface ILogEventSink
+{
+    void Emit(LogEvent logEvent);
+}
+```
+
+## Methods
+
+### Emit
+
+Emits the provided log event to the sink.
+
+```csharp
+void Emit(LogEvent logEvent)
+```
+
+<ParamField path="logEvent" type="LogEvent" required>
+  The log event to write. Contains all information about the log entry including timestamp, level, message template, properties, and exception data.
+</ParamField>
+
+#### Remarks
+
+Implementers should allow exceptions to propagate when event emission fails. The logger will handle exceptions and produce diagnostics appropriately.
+
+## Implementation Guidance
+
+When implementing `ILogEventSink`, consider the following:
+
+### Exception Handling
+
+Allow exceptions to bubble up rather than catching them internally. Serilog's pipeline will handle failures appropriately and can emit self-log diagnostics.
+
+```csharp
+public class CustomSink : ILogEventSink
+{
+    public void Emit(LogEvent logEvent)
+    {
+        // Don't wrap in try-catch - let exceptions propagate
+        WriteToDestination(logEvent);
+    }
+}
+```
+
+### Thread Safety
+
+Ensure your implementation is thread-safe, as `Emit()` may be called concurrently from multiple threads:
+
+```csharp
+public class ThreadSafeSink : ILogEventSink
+{
+    private readonly object _syncRoot = new object();
+    
+    public void Emit(LogEvent logEvent)
+    {
+        lock (_syncRoot)
+        {
+            // Thread-safe emission logic
+        }
+    }
+}
+```
+
+### Performance Considerations
+
+- Keep `Emit()` fast to avoid blocking the logging pipeline
+- Consider batching for high-volume scenarios (see `IBatchedLogEventSink`)
+- Avoid synchronous I/O operations when possible
+- Use buffering for network or disk-based sinks
+
+### Disposal
+
+If your sink holds resources, implement `IDisposable`:
+
+```csharp
+public class ResourcefulSink : ILogEventSink, IDisposable
+{
+    private readonly StreamWriter _writer;
+    
+    public void Emit(LogEvent logEvent)
+    {
+        _writer.WriteLine(logEvent.RenderMessage());
+    }
+    
+    public void Dispose()
+    {
+        _writer?.Dispose();
+    }
+}
+```
+
+## Example Implementation
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using Serilog.Formatting;
+using System.IO;
+
+public class FileSink : ILogEventSink, IDisposable
+{
+    private readonly ITextFormatter _formatter;
+    private readonly StreamWriter _writer;
+    private readonly object _syncRoot = new object();
+    
+    public FileSink(string path, ITextFormatter formatter)
+    {
+        _formatter = formatter;
+        _writer = new StreamWriter(path, append: true);
+    }
+    
+    public void Emit(LogEvent logEvent)
+    {
+        lock (_syncRoot)
+        {
+            _formatter.Format(logEvent, _writer);
+            _writer.Flush();
+        }
+    }
+    
+    public void Dispose()
+    {
+        lock (_syncRoot)
+        {
+            _writer?.Dispose();
+        }
+    }
+}
+
+// Usage
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Sink(new FileSink("log.txt", new JsonFormatter()))
+    .CreateLogger();
+```
+
+## Related Interfaces
+
+- `IBatchedLogEventSink` - For sinks that process events in batches for better performance
+- `ILogEventFilter` - For filtering which events reach the sink
+- `ILogEventEnricher` - For adding properties before events reach the sink

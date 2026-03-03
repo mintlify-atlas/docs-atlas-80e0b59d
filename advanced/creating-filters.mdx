@@ -1,0 +1,411 @@
+---
+title: Creating Custom Filters
+description: Implement custom filters using ILogEventFilter to control which log events are processed by the logging pipeline
+---
+
+Filters provide fine-grained control over which log events are processed. Unlike minimum level configuration, filters can inspect the entire log event and make decisions based on any aspect of the event.
+
+## The ILogEventFilter Interface
+
+Filters implement the `ILogEventFilter` interface:
+
+```csharp
+public interface ILogEventFilter
+{
+    /// <summary>
+    /// Returns true if the provided event is enabled. Otherwise, false.
+    /// </summary>
+    /// <param name="logEvent">The event to test.</param>
+    /// <returns>True if the event is enabled; false if it should not be emitted.</returns>
+    bool IsEnabled(LogEvent logEvent);
+}
+```
+
+<Note>
+When `IsEnabled` returns `false`, the event is dropped and will not reach any sinks.
+</Note>
+
+## Simple Level-Based Filter
+
+Filter events based on log level:
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+
+public class MinimumLevelFilter : ILogEventFilter
+{
+    private readonly LogEventLevel _minimumLevel;
+
+    public MinimumLevelFilter(LogEventLevel minimumLevel)
+    {
+        _minimumLevel = minimumLevel;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        return logEvent.Level >= _minimumLevel;
+    }
+}
+```
+
+## Property-Based Filter
+
+Filter based on event properties:
+
+```csharp
+public class PropertyFilter : ILogEventFilter
+{
+    private readonly string _propertyName;
+    private readonly string _requiredValue;
+
+    public PropertyFilter(string propertyName, string requiredValue)
+    {
+        _propertyName = propertyName;
+        _requiredValue = requiredValue;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue(_propertyName, out var propertyValue))
+        {
+            return false;
+        }
+
+        // Compare the property value (removing quotes from scalar strings)
+        return propertyValue.ToString().Trim('\"') == _requiredValue;
+    }
+}
+```
+
+## Source Context Filter
+
+Filter based on the logger's source context:
+
+```csharp
+public class SourceContextFilter : ILogEventFilter
+{
+    private readonly string _allowedPrefix;
+
+    public SourceContextFilter(string allowedPrefix)
+    {
+        _allowedPrefix = allowedPrefix;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue("SourceContext", out var sourceContext))
+        {
+            return true; // Allow events without source context
+        }
+
+        var sourceContextValue = sourceContext.ToString().Trim('\"');
+        return sourceContextValue.StartsWith(_allowedPrefix);
+    }
+}
+```
+
+Usage:
+
+```csharp
+// Only log events from MyApp.* namespaces
+var filter = new SourceContextFilter("MyApp");
+```
+
+## Exception-Based Filter
+
+Filter based on exception types:
+
+```csharp
+public class ExceptionTypeFilter : ILogEventFilter
+{
+    private readonly Type[] _ignoredExceptionTypes;
+
+    public ExceptionTypeFilter(params Type[] ignoredExceptionTypes)
+    {
+        _ignoredExceptionTypes = ignoredExceptionTypes;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        if (logEvent.Exception == null)
+        {
+            return true;
+        }
+
+        var exceptionType = logEvent.Exception.GetType();
+        return !_ignoredExceptionTypes.Any(t => t.IsAssignableFrom(exceptionType));
+    }
+}
+```
+
+Usage:
+
+```csharp
+// Ignore OperationCanceledException and TaskCanceledException
+var filter = new ExceptionTypeFilter(
+    typeof(OperationCanceledException),
+    typeof(TaskCanceledException)
+);
+```
+
+## Message Template Filter
+
+Filter based on message template patterns:
+
+```csharp
+public class MessageTemplateFilter : ILogEventFilter
+{
+    private readonly string[] _excludedPatterns;
+
+    public MessageTemplateFilter(params string[] excludedPatterns)
+    {
+        _excludedPatterns = excludedPatterns;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        var messageTemplate = logEvent.MessageTemplate.Text;
+        
+        return !_excludedPatterns.Any(pattern => 
+            messageTemplate.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+    }
+}
+```
+
+## Composite Filter
+
+Combine multiple filters with AND/OR logic:
+
+```csharp
+public class CompositeFilter : ILogEventFilter
+{
+    private readonly ILogEventFilter[] _filters;
+    private readonly bool _requireAll;
+
+    public CompositeFilter(bool requireAll, params ILogEventFilter[] filters)
+    {
+        _filters = filters;
+        _requireAll = requireAll;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        if (_requireAll)
+        {
+            // AND logic - all filters must pass
+            return _filters.All(f => f.IsEnabled(logEvent));
+        }
+        else
+        {
+            // OR logic - at least one filter must pass
+            return _filters.Any(f => f.IsEnabled(logEvent));
+        }
+    }
+}
+```
+
+Usage:
+
+```csharp
+// Event must be Warning+ AND from MyApp namespace
+var filter = new CompositeFilter(
+    requireAll: true,
+    new MinimumLevelFilter(LogEventLevel.Warning),
+    new SourceContextFilter("MyApp")
+);
+```
+
+## Time-Based Filter
+
+Filter events based on time of day:
+
+```csharp
+public class BusinessHoursFilter : ILogEventFilter
+{
+    private readonly TimeSpan _startTime;
+    private readonly TimeSpan _endTime;
+
+    public BusinessHoursFilter(TimeSpan startTime, TimeSpan endTime)
+    {
+        _startTime = startTime;
+        _endTime = endTime;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        var timeOfDay = logEvent.Timestamp.TimeOfDay;
+        return timeOfDay >= _startTime && timeOfDay <= _endTime;
+    }
+}
+```
+
+## Sampling Filter
+
+Log only a percentage of events:
+
+```csharp
+public class SamplingFilter : ILogEventFilter
+{
+    private readonly double _samplingRate;
+    private long _counter;
+
+    public SamplingFilter(double samplingRate)
+    {
+        if (samplingRate <= 0 || samplingRate > 1)
+            throw new ArgumentOutOfRangeException(nameof(samplingRate));
+        
+        _samplingRate = samplingRate;
+    }
+
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        var count = Interlocked.Increment(ref _counter);
+        return (count % (int)(1 / _samplingRate)) == 0;
+    }
+}
+```
+
+Usage:
+
+```csharp
+// Log 10% of events
+var filter = new SamplingFilter(0.1);
+```
+
+## Integration with FilteringSink
+
+Serilog's internal `FilteringSink` applies filters:
+
+```csharp
+class FilteringSink : ILogEventSink
+{
+    private readonly ILogEventSink _sink;
+    private readonly ILogEventFilter[] _filters;
+    private readonly bool _propagateExceptions;
+
+    public FilteringSink(ILogEventSink sink, IEnumerable<ILogEventFilter> filters, bool propagateExceptions)
+    {
+        _sink = sink;
+        _filters = filters.ToArray();
+        _propagateExceptions = propagateExceptions;
+    }
+
+    public void Emit(LogEvent logEvent)
+    {
+        try
+        {
+            foreach (var filter in _filters)
+            {
+                if (!filter.IsEnabled(logEvent))
+                    return; // Event is filtered out
+            }
+
+            _sink.Emit(logEvent);
+        }
+        catch (Exception ex)
+        {
+            SelfLog.WriteLine("Caught exception while applying filters: {0}", ex);
+            
+            if (_propagateExceptions)
+                throw;
+        }
+    }
+}
+```
+
+## Configuration Extension Methods
+
+Create extension methods for fluent configuration:
+
+```csharp
+using Serilog;
+using Serilog.Configuration;
+
+public static class FilterConfigurationExtensions
+{
+    public static LoggerConfiguration ExcludeExceptionTypes(
+        this LoggerFilterConfiguration filterConfiguration,
+        params Type[] exceptionTypes)
+    {
+        if (filterConfiguration == null)
+            throw new ArgumentNullException(nameof(filterConfiguration));
+
+        return filterConfiguration.With(new ExceptionTypeFilter(exceptionTypes));
+    }
+
+    public static LoggerConfiguration SampleAt(
+        this LoggerFilterConfiguration filterConfiguration,
+        double rate)
+    {
+        if (filterConfiguration == null)
+            throw new ArgumentNullException(nameof(filterConfiguration));
+
+        return filterConfiguration.With(new SamplingFilter(rate));
+    }
+}
+```
+
+Usage:
+
+```csharp
+var logger = new LoggerConfiguration()
+    .Filter.ExcludeExceptionTypes(typeof(OperationCanceledException))
+    .Filter.SampleAt(0.1)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Performance Considerations
+
+<Warning>
+Filters execute for every log event before it reaches sinks. Keep filter logic fast and avoid I/O operations.
+</Warning>
+
+<Steps>
+
+<Step title="Optimize hot paths">
+Use early returns to avoid unnecessary checks when an event should be filtered.
+</Step>
+
+<Step title="Cache regex patterns">
+If using regular expressions, compile them once and cache the instances.
+</Step>
+
+<Step title="Use concurrent collections carefully">
+Filters may be called from multiple threads. Use thread-safe primitives for shared state.
+</Step>
+
+<Step title="Avoid allocations">
+Minimize object allocation in filter logic to reduce GC pressure.
+</Step>
+
+</Steps>
+
+## Best Practices
+
+<Steps>
+
+<Step title="Filter early">
+Apply filters as early in the pipeline as possible to avoid unnecessary processing.
+</Step>
+
+<Step title="Be conservative with filtering">
+When in doubt, allow the event through. It's better to log too much than too little.
+</Step>
+
+<Step title="Handle exceptions gracefully">
+Filters should not throw exceptions. Use try-catch blocks for any risky operations.
+</Step>
+
+<Step title="Document filter behavior">
+Clearly document what criteria cause events to be filtered.
+</Step>
+
+</Steps>
+
+## Next Steps
+
+- Learn about [creating custom sinks](/advanced/creating-sinks)
+- Explore [creating custom enrichers](/advanced/creating-enrichers)
+- Understand [logger lifecycle and disposal](/advanced/lifecycle)

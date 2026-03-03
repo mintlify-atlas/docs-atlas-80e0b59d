@@ -1,0 +1,571 @@
+---
+title: "ASP.NET Core Integration"
+description: "Integrating Serilog with ASP.NET Core applications"
+---
+
+Serilog integrates seamlessly with ASP.NET Core, replacing the default logging provider with structured logging capabilities.
+
+## Installation
+
+```bash
+dotnet add package Serilog.AspNetCore
+```
+
+This package includes:
+- `Serilog` core library
+- ASP.NET Core integration
+- Diagnostic context
+- Request logging middleware
+
+## Basic Setup
+
+### Program.cs (Minimal API / .NET 6+)
+
+```csharp
+using Serilog;
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+try
+{
+    Log.Information("Starting web application");
+
+    var builder = WebApplication.CreateBuilder(args);
+    
+    builder.Host.UseSerilog();
+
+    var app = builder.Build();
+    
+    app.MapGet("/", () => "Hello World!");
+    
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Application terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
+```
+
+<Note>
+Create the logger **before** calling `CreateBuilder()` to capture startup errors. Call `Log.CloseAndFlush()` in the `finally` block to ensure buffered events are written.
+</Note>
+
+### Configuration from appsettings.json
+
+```bash
+dotnet add package Serilog.Settings.Configuration
+```
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((context, configuration) =>
+    configuration.ReadFrom.Configuration(context.Configuration));
+```
+
+**appsettings.json:**
+```json
+{
+  "Serilog": {
+    "Using": ["Serilog.Sinks.Console", "Serilog.Sinks.File"],
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "Microsoft.Hosting.Lifetime": "Information",
+        "System": "Warning"
+      }
+    },
+    "WriteTo": [
+      { "Name": "Console" },
+      {
+        "Name": "File",
+        "Args": {
+          "path": "logs/log-.txt",
+          "rollingInterval": "Day"
+        }
+      }
+    ],
+    "Enrich": ["FromLogContext", "WithMachineName"],
+    "Properties": {
+      "Application": "MyWebApp"
+    }
+  }
+}
+```
+
+<Tip>
+Use different `appsettings.{Environment}.json` files to configure logging per environment.
+</Tip>
+
+## Request Logging
+
+Serilog provides specialized middleware for HTTP request logging:
+
+```csharp
+var app = builder.Build();
+
+app.UseSerilogRequestLogging();
+
+app.MapControllers();
+app.Run();
+```
+
+**Output:**
+```
+HTTP GET / responded 200 in 12.3456 ms
+```
+
+### Customizing Request Logs
+
+```csharp
+app.UseSerilogRequestLogging(options =>
+{
+    // Customize the message template
+    options.MessageTemplate = 
+        "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
+    
+    // Emit debug-level logs for requests starting with /health
+    options.GetLevel = (httpContext, elapsed, ex) => ex != null
+        ? LogEventLevel.Error
+        : httpContext.Response.StatusCode > 499
+            ? LogEventLevel.Error
+            : httpContext.Request.Path.StartsWithSegments("/health")
+                ? LogEventLevel.Debug
+                : LogEventLevel.Information;
+    
+    // Attach additional properties to the request log
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+    {
+        diagnosticContext.Set("RequestHost", httpContext.Request.Host.Value);
+        diagnosticContext.Set("RequestScheme", httpContext.Request.Scheme);
+        diagnosticContext.Set("UserAgent", httpContext.Request.Headers["User-Agent"].ToString());
+        
+        if (httpContext.User.Identity?.IsAuthenticated == true)
+        {
+            diagnosticContext.Set("UserName", httpContext.User.Identity.Name);
+        }
+    };
+});
+```
+
+<Note>
+`UseSerilogRequestLogging()` should be placed **early** in the pipeline, but **after** any error handling middleware.
+</Note>
+
+## Diagnostic Context
+
+The diagnostic context allows you to attach properties to the current request log:
+
+```csharp
+using Serilog;
+
+app.MapGet("/orders/{id}", async (int id, IDiagnosticContext diagnosticContext) =>
+{
+    diagnosticContext.Set("OrderId", id);
+    
+    var order = await GetOrderAsync(id);
+    diagnosticContext.Set("OrderTotal", order.Total);
+    diagnosticContext.Set("CustomerId", order.CustomerId);
+    
+    return order;
+});
+```
+
+**Request log output:**
+```json
+{
+  "RequestMethod": "GET",
+  "RequestPath": "/orders/123",
+  "StatusCode": 200,
+  "Elapsed": 45.2,
+  "OrderId": 123,
+  "OrderTotal": 99.99,
+  "CustomerId": "cust-456"
+}
+```
+
+<Tip>
+Diagnostic context properties appear only in the request completion log, not in individual log events within the request.
+</Tip>
+
+## Structured Logging in Controllers
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using Serilog;
+
+[ApiController]
+[Route("[controller]")]
+public class OrdersController : ControllerBase
+{
+    readonly ILogger<OrdersController> _logger;
+
+    public OrdersController(ILogger<OrdersController> logger)
+    {
+        _logger = logger;
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> CreateOrder(CreateOrderRequest request)
+    {
+        _logger.LogInformation(
+            "Creating order for customer {CustomerId} with {ItemCount} items",
+            request.CustomerId,
+            request.Items.Count);
+
+        try
+        {
+            var order = await _orderService.CreateAsync(request);
+            
+            _logger.LogInformation(
+                "Order created with ID {OrderId} and total {OrderTotal:C}",
+                order.Id,
+                order.Total);
+                
+            return Ok(order);
+        }
+        catch (ValidationException ex)
+        {
+            _logger.LogWarning(ex,
+                "Order validation failed for customer {CustomerId}",
+                request.CustomerId);
+            return BadRequest(ex.Errors);
+        }
+    }
+}
+```
+
+<Note>
+ASP.NET Core's `ILogger<T>` is injected automatically and works with Serilog after calling `UseSerilog()`.
+</Note>
+
+## Filtering Framework Logs
+
+Reduce noise from ASP.NET Core and Entity Framework:
+
+```json
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "Microsoft.AspNetCore": "Warning",
+        "Microsoft.EntityFrameworkCore": "Warning",
+        "System.Net.Http.HttpClient": "Warning"
+      }
+    }
+  }
+}
+```
+
+<CodeGroup>
+
+```json Production
+{
+  "Override": {
+    "Microsoft": "Warning",
+    "System": "Warning"
+  }
+}
+```
+
+```json Development
+{
+  "Override": {
+    "Microsoft": "Information",
+    "Microsoft.Hosting.Lifetime": "Information",
+    "Microsoft.EntityFrameworkCore.Database.Command": "Information"
+  }
+}
+```
+
+</CodeGroup>
+
+## Request Context with LogContext
+
+Combine LogContext with ASP.NET Core middleware:
+
+```csharp
+public class RequestCorrelationMiddleware
+{
+    readonly RequestDelegate _next;
+
+    public RequestCorrelationMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var requestId = context.TraceIdentifier;
+        
+        using (LogContext.PushProperty("RequestId", requestId))
+        using (LogContext.PushProperty("UserName", context.User?.Identity?.Name))
+        {
+            await _next(context);
+        }
+    }
+}
+
+// Register in pipeline
+app.UseMiddleware<RequestCorrelationMiddleware>();
+```
+
+Now all logs within a request automatically include `RequestId` and `UserName`:
+
+```csharp
+Log.Information("Processing payment");
+// Output: [RequestId=abc123, UserName=alice] Processing payment
+```
+
+## Health Checks
+
+Log health check results:
+
+```csharp
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+
+builder.Services.AddHealthChecks()
+    .AddCheck("database", () => HealthCheckResult.Healthy());
+
+app.MapHealthChecks("/health");
+
+// Optionally log health check failures
+app.UseSerilogRequestLogging(options =>
+{
+    options.GetLevel = (ctx, elapsed, ex) =>
+        ctx.Request.Path.StartsWithSegments("/health")
+            ? ctx.Response.StatusCode == 200
+                ? LogEventLevel.Debug
+                : LogEventLevel.Warning
+            : LogEventLevel.Information;
+});
+```
+
+## Exception Handling
+
+Log unhandled exceptions:
+
+```csharp
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var exceptionHandlerFeature = context.Features.Get<IExceptionHandlerFeature>();
+        var exception = exceptionHandlerFeature?.Error;
+
+        Log.Error(exception, "Unhandled exception in request {RequestPath}",
+            context.Request.Path);
+
+        context.Response.StatusCode = 500;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            Error = "An error occurred processing your request."
+        });
+    });
+});
+```
+
+<Warning>
+`UseSerilogRequestLogging()` should be placed **after** exception handling middleware to ensure exceptions are logged correctly.
+</Warning>
+
+## Background Services
+
+Log from background services:
+
+```csharp
+public class OrderProcessingService : BackgroundService
+{
+    readonly ILogger<OrderProcessingService> _logger;
+
+    public OrderProcessingService(ILogger<OrderProcessingService> logger)
+    {
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Order processing service starting");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await ProcessOrdersAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing orders");
+            }
+
+            await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+        }
+
+        _logger.LogInformation("Order processing service stopping");
+    }
+}
+```
+
+## Common Patterns
+
+### Multi-environment Configuration
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((context, configuration) =>
+{
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .Enrich.FromLogContext()
+        .Enrich.WithProperty("Environment", context.HostingEnvironment.EnvironmentName);
+
+    if (context.HostingEnvironment.IsDevelopment())
+    {
+        configuration.WriteTo.Console();
+    }
+    else
+    {
+        configuration
+            .WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Day)
+            .WriteTo.Seq("http://seq-server:5341");
+    }
+});
+```
+
+### Correlation with Distributed Tracing
+
+```csharp
+using System.Diagnostics;
+
+app.UseSerilogRequestLogging(options =>
+{
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+    {
+        var activity = Activity.Current;
+        if (activity != null)
+        {
+            diagnosticContext.Set("TraceId", activity.TraceId);
+            diagnosticContext.Set("SpanId", activity.SpanId);
+        }
+    };
+});
+```
+
+### User Activity Tracking
+
+```csharp
+public class UserActivityMiddleware
+{
+    readonly RequestDelegate _next;
+
+    public UserActivityMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        if (context.User.Identity?.IsAuthenticated == true)
+        {
+            using (LogContext.PushProperty("UserId", context.User.FindFirst("sub")?.Value))
+            using (LogContext.PushProperty("UserName", context.User.Identity.Name))
+            {
+                await _next(context);
+            }
+        }
+        else
+        {
+            await _next(context);
+        }
+    }
+}
+```
+
+## Best Practices
+
+<Steps>
+
+<Step title="Configure logging early">
+Create the logger before `CreateBuilder()` to capture startup errors.
+</Step>
+
+<Step title="Use request logging middleware">
+`UseSerilogRequestLogging()` provides structured HTTP logs with minimal overhead.
+</Step>
+
+<Step title="Enrich with diagnostic context">
+Add request-specific properties using `IDiagnosticContext` in controllers and endpoints.
+</Step>
+
+<Step title="Filter framework logs">
+Reduce noise by setting higher minimum levels for Microsoft and System namespaces.
+</Step>
+
+<Step title="Always flush on shutdown">
+Call `Log.CloseAndFlush()` in a `finally` block to ensure buffered events are written.
+</Step>
+
+</Steps>
+
+## Troubleshooting
+
+### Logs not appearing
+
+```csharp
+// ❌ Logger not configured
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+// ✅ Configure Serilog
+var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseSerilog((context, configuration) =>
+    configuration.WriteTo.Console());
+```
+
+### Request logs missing properties
+
+```csharp
+// ❌ Forgot to enrich from LogContext
+new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+// ✅ Enable LogContext enrichment
+new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Startup errors not logged
+
+```csharp
+// ❌ Logger created too late
+var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseSerilog();
+
+// ✅ Create logger before builder
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+try
+{
+    var builder = WebApplication.CreateBuilder(args);
+    builder.Host.UseSerilog();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Failed to start");
+}
+```

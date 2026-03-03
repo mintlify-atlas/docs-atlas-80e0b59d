@@ -1,0 +1,306 @@
+---
+title: ILogEventFilter
+description: Interface for implementing custom filtering logic in the Serilog pipeline
+---
+
+The `ILogEventFilter` interface provides filtering capabilities in the Serilog logging pipeline. Filters can suppress log events based on custom criteria, enabling fine-grained control over which events are processed and emitted to sinks.
+
+## Interface Definition
+
+```csharp
+public interface ILogEventFilter
+{
+    bool IsEnabled(LogEvent logEvent);
+}
+```
+
+## Methods
+
+### IsEnabled
+
+Determines whether the provided log event should be processed.
+
+```csharp
+bool IsEnabled(LogEvent logEvent)
+```
+
+<ParamField path="logEvent" type="LogEvent" required>
+  The event to test. This contains all information about the log entry including level, message template, properties, timestamp, and exception data.
+</ParamField>
+
+<ParamField path="returns" type="bool">
+  Returns `true` if the event is enabled by this filter and should be processed. Returns `false` if the event should be suppressed and not emitted.
+</ParamField>
+
+## Implementation Guidance
+
+When implementing `ILogEventFilter`, consider the following:
+
+### Return Value Semantics
+
+- Return `true` to allow the event through the pipeline
+- Return `false` to suppress the event and prevent emission
+- All filters must return `true` for an event to be processed
+
+### Performance Considerations
+
+- Keep `IsEnabled()` extremely fast as it's called for every log event
+- Avoid expensive operations, I/O, or external calls
+- Cache any necessary data in the constructor
+- Consider the overhead of your filter logic
+
+### Thread Safety
+
+Filters must be thread-safe as they may be called concurrently from multiple threads:
+
+```csharp
+public class ThreadSafeFilter : ILogEventFilter
+{
+    private readonly HashSet<string> _blockedSources;
+    private readonly object _syncRoot = new object();
+    
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        lock (_syncRoot)
+        {
+            return !_blockedSources.Contains(GetSource(logEvent));
+        }
+    }
+}
+```
+
+### Filter Logic Patterns
+
+Common filtering patterns include:
+- Level-based filtering (already handled by MinimumLevel, but can be extended)
+- Property-based filtering (filter by specific property values)
+- Source context filtering (filter by namespace or class name)
+- Content-based filtering (filter by message content or patterns)
+- Time-based filtering (filter by time of day or date ranges)
+- Sampling (allow only a percentage of events through)
+
+## Example Implementations
+
+### Property-Based Filter
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+
+public class PropertyFilter : ILogEventFilter
+{
+    private readonly string _propertyName;
+    private readonly object _excludeValue;
+    
+    public PropertyFilter(string propertyName, object excludeValue)
+    {
+        _propertyName = propertyName;
+        _excludeValue = excludeValue;
+    }
+    
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue(_propertyName, out var propertyValue))
+            return true;
+            
+        if (propertyValue is ScalarValue scalar)
+        {
+            return !Equals(scalar.Value, _excludeValue);
+        }
+        
+        return true;
+    }
+}
+
+// Usage - filter out events with specific property value
+Log.Logger = new LoggerConfiguration()
+    .Filter.With(new PropertyFilter("SourceContext", "Noisy.Component"))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Source Context Filter
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Collections.Generic;
+using System.Linq;
+
+public class SourceContextFilter : ILogEventFilter
+{
+    private readonly HashSet<string> _excludedNamespaces;
+    
+    public SourceContextFilter(params string[] excludedNamespaces)
+    {
+        _excludedNamespaces = new HashSet<string>(excludedNamespaces);
+    }
+    
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue("SourceContext", out var sourceContext))
+            return true;
+            
+        if (sourceContext is ScalarValue scalar && scalar.Value is string contextName)
+        {
+            return !_excludedNamespaces.Any(ns => contextName.StartsWith(ns));
+        }
+        
+        return true;
+    }
+}
+
+// Usage - exclude logs from specific namespaces
+Log.Logger = new LoggerConfiguration()
+    .Filter.With(new SourceContextFilter(
+        "Microsoft.EntityFrameworkCore",
+        "System.Net.Http"))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Sampling Filter
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System;
+using System.Threading;
+
+public class SamplingFilter : ILogEventFilter
+{
+    private readonly int _sampleRate;
+    private int _counter;
+    
+    public SamplingFilter(int sampleRate)
+    {
+        if (sampleRate <= 0)
+            throw new ArgumentException("Sample rate must be positive", nameof(sampleRate));
+            
+        _sampleRate = sampleRate;
+    }
+    
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        var count = Interlocked.Increment(ref _counter);
+        return count % _sampleRate == 1;
+    }
+}
+
+// Usage - keep only 1 in every 10 events
+Log.Logger = new LoggerConfiguration()
+    .Filter.With(new SamplingFilter(10))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Message Pattern Filter
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Text.RegularExpressions;
+
+public class MessagePatternFilter : ILogEventFilter
+{
+    private readonly Regex _pattern;
+    private readonly bool _includeMatches;
+    
+    public MessagePatternFilter(string pattern, bool includeMatches = false)
+    {
+        _pattern = new Regex(pattern, RegexOptions.Compiled);
+        _includeMatches = includeMatches;
+    }
+    
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        var message = logEvent.MessageTemplate.Text;
+        var matches = _pattern.IsMatch(message);
+        
+        return _includeMatches ? matches : !matches;
+    }
+}
+
+// Usage - exclude events matching a pattern
+Log.Logger = new LoggerConfiguration()
+    .Filter.With(new MessagePatternFilter("healthcheck|heartbeat", includeMatches: false))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+### Time Window Filter
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System;
+
+public class TimeWindowFilter : ILogEventFilter
+{
+    private readonly TimeSpan _startTime;
+    private readonly TimeSpan _endTime;
+    
+    public TimeWindowFilter(TimeSpan startTime, TimeSpan endTime)
+    {
+        _startTime = startTime;
+        _endTime = endTime;
+    }
+    
+    public bool IsEnabled(LogEvent logEvent)
+    {
+        var time = logEvent.Timestamp.TimeOfDay;
+        
+        if (_startTime <= _endTime)
+        {
+            return time >= _startTime && time <= _endTime;
+        }
+        else // Spans midnight
+        {
+            return time >= _startTime || time <= _endTime;
+        }
+    }
+}
+
+// Usage - only log during business hours
+Log.Logger = new LoggerConfiguration()
+    .Filter.With(new TimeWindowFilter(
+        new TimeSpan(9, 0, 0),  // 9 AM
+        new TimeSpan(17, 0, 0))) // 5 PM
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Configuration Methods
+
+Filters can be added to the logging pipeline using the `Filter` configuration object:
+
+```csharp
+// Add a specific filter instance
+Log.Logger = new LoggerConfiguration()
+    .Filter.With(new PropertyFilter("Environment", "Test"))
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Add a filter by type (requires parameterless constructor)
+Log.Logger = new LoggerConfiguration()
+    .Filter.With<CustomFilter>()
+    .WriteTo.Console()
+    .CreateLogger();
+
+// Chain multiple filters (all must return true)
+Log.Logger = new LoggerConfiguration()
+    .Filter.With(new SourceContextFilter("Noisy.Namespace"))
+    .Filter.With(new SamplingFilter(10))
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+## Filter Ordering
+
+Filters are applied in the order they're configured. If any filter returns `false`, the event is suppressed and subsequent filters are not evaluated.
+
+## Related Interfaces
+
+- `ILogEventEnricher` - For adding properties to log events before filtering
+- `ILogEventSink` - Receives events that pass through all filters
+- `LoggingLevelSwitch` - For dynamic level-based filtering
